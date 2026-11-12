@@ -1,51 +1,29 @@
-// Who can see / do what. Roles: 'admin' (owner), 'head' (team head), 'employee'.
+// Roles: 'admin' (sees and edits everything), 'head' (department head), 'member'.
+// Anyone can give a task to anyone. Heads and the admin can see their team's work at a glance.
 
-export const ROLE_LABEL = { admin: 'Admin', head: 'Team head', employee: 'Employee' }
+export const ROLE_LABEL = { admin: 'Admin', head: 'Head', member: 'Member' }
 
-// ids of the people a user is responsible for (self + direct reports; admin = everyone)
-export function scopeIds(user, employees) {
+export const isAdmin = (u) => u?.role === 'admin'
+export const isLead = (u) => u?.role === 'admin' || u?.role === 'head'
+
+// self + everyone who reports to me (directly or further down); admin = everyone
+export function teamIds(user, employees) {
   if (!user) return []
-  if (user.role === 'admin') return employees.map((e) => e.id)
-  if (user.role === 'head') return [user.id, ...employees.filter((e) => e.headId === user.id).map((e) => e.id)]
-  return [user.id]
-}
-
-export function visibleTasks(user, tasks, employees) {
-  if (!user) return []
-  if (user.role === 'admin') return tasks
-  const ids = new Set(scopeIds(user, employees))
-  return tasks.filter((t) => ids.has(t.assigneeId) || t.assignedById === user.id || t.blocked?.onId === user.id)
-}
-
-// people this user may assign a task to
-export function assignableEmployees(user, employees) {
-  const ids = new Set(scopeIds(user, employees))
-  return employees.filter((e) => e.active && ids.has(e.id))
+  if (isAdmin(user)) return employees.map((e) => e.id)
+  const out = new Set([user.id])
+  let grew = true
+  while (grew) {
+    grew = false
+    employees.forEach((e) => { if (e.headId && out.has(e.headId) && !out.has(e.id)) { out.add(e.id); grew = true } })
+  }
+  return [...out]
 }
 
 export function canEditTask(user, task, employees) {
   if (!user || !task) return false
-  if (user.role === 'admin') return true
-  if (task.assigneeId === user.id || task.assignedById === user.id) return true
-  return user.role === 'head' && scopeIds(user, employees).includes(task.assigneeId)
+  if (isAdmin(user) || task.assigneeId === user.id || task.assignedById === user.id) return true
+  return user.role === 'head' && teamIds(user, employees).includes(task.assigneeId)
 }
 
-export function canReassign(user, task, employees) {
-  if (!user || !task) return false
-  if (user.role === 'admin') return true
-  return user.role === 'head' && (task.assignedById === user.id || scopeIds(user, employees).includes(task.assigneeId))
-}
-
-export function visibleClients(user, clients, projects, tasks, employees) {
-  if (!user) return []
-  if (user.role === 'admin') return clients
-  const ids = new Set(scopeIds(user, employees))
-  const mine = new Set()
-  clients.forEach((c) => ids.has(c.ownerId) && mine.add(c.id))
-  projects.forEach((p) => p.memberIds.some((m) => ids.has(m)) && mine.add(p.clientId))
-  visibleTasks(user, tasks, employees).forEach((t) => t.clientId && mine.add(t.clientId))
-  return clients.filter((c) => mine.has(c.id))
-}
-
-export const canManageClients = (user) => user?.role === 'admin' || user?.role === 'head'
-export const isAdmin = (user) => user?.role === 'admin'
+export const canDeleteTask = (user, task) => isAdmin(user) || task?.assignedById === user?.id
+export const canManageClients = isLead

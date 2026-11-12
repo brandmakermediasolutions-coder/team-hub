@@ -62,3 +62,26 @@ export const greeting = () => {
   const h = new Date().getHours()
   return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'
 }
+
+export const shortDate = (isoDate) => {
+  if (!isoDate) return ''
+  const [y, m, d] = isoDate.split('-').map(Number)
+  return new Date(y, m - 1, d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
+}
+
+// all ISO dates in the month of the given ISO date ('2026-11-12' -> ['2026-11-01', …])
+export const monthDays = (isoDate) => {
+  const [y, m] = isoDate.split('-').map(Number)
+  const n = new Date(y, m, 0).getDate()
+  return Array.from({ length: n }, (_, i) => `${y}-${z(m)}-${z(i + 1)}`)
+}
+
+export const shiftMonth = (isoDate, delta) => {
+  const [y, m] = isoDate.split('-').map(Number)
+  return iso(new Date(y, m - 1 + delta, 1))
+}
+
+export const monthLabel = (isoDate) => {
+  const [y, m] = isoDate.split('-').map(Number)
+  return new Date(y, m - 1, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })
+}

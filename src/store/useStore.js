@@ -1,68 +1,136 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { buildSeed, STATUSES } from './seed'
+import { isCloud, supabase, loadAll, saveRow, deleteRow, subscribe } from '../lib/backend'
+import { todayIso } from '../lib/date'
 
 /*
-  Single app store (persisted to localStorage — this draft has no backend yet).
+  One app store.
+  DATA     employees, clients, tasks, comments, updates (daily updates), posts (post calendar), activity
+  SESSION  phase: 'loading' | 'login' | 'recovery' | 'not-on-team' | 'error' | 'ready'
+           currentUserId, theme, lastSeen{userId: ts}
+  UI       openTaskId (task drawer), newTask (null | defaults for the New task window), toast
 
-  DATA      employees, clients, projects, tasks, comments, activity
-  SESSION   currentUserId, theme, lastSeen{userId: ts}
-  UI        openTaskId (task drawer), newTask (null | {defaults} for the New-task modal)
-
-  ACTIONS
-    login(id, password) -> { ok, error? }        logout()
-    createTask(data) -> id                        updateTask(id, patch)
-    addComment(taskId, text)
-    createEmployee(data) -> id                    updateEmployee(id, patch)
-    createClient(data) -> id                      updateClient(id, patch)
-    reassignClient(clientId, ownerId, note?)
-    createProject(data) -> id                     updateProject(id, patch)
-    openTask(id) / closeTask()                    openNewTask(defaults?) / closeNewTask()
-    toggleTheme()   markSeen()   resetDemo()
+  Every change is applied on screen first, then saved to the shared database (cloud mode).
+  In demo mode everything is kept in this browser's storage.
 */
 
-const nextId = (list, prefix, pad = 2, start = 1) => {
-  const max = list.reduce((m, x) => Math.max(m, parseInt(String(x.id).split('-')[1], 10) || 0), start - 1)
+const DATA_KEYS = ['employees', 'clients', 'tasks', 'comments', 'updates', 'posts', 'activity']
+const empty = Object.fromEntries(DATA_KEYS.map((k) => [k, []]))
+const uid = (prefix) => `${prefix}-${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).slice(2, 5).toUpperCase()}`
+const nextId = (list, prefix, pad) => {
+  const max = list.reduce((m, x) => Math.max(m, parseInt(String(x.id).split('-')[1], 10) || 0), 0)
   return `${prefix}-${String(max + 1).padStart(pad, '0')}`
 }
 const statusLabel = (id) => STATUSES.find((s) => s.id === id)?.label ?? id
 const firstName = (e) => e?.name?.split(' ')[0] ?? 'someone'
+let unsubscribe = null
 
 export const useStore = create(
   persist(
     (set, get) => {
-      const log = (entry) => ({
-        id: `A-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        at: Date.now(),
-        actorId: get().currentUserId,
-        ...entry,
+      // ---------- low-level write helpers ----------
+      const upsertLocal = (table, row) => set((s) => {
+        const list = s[table]
+        const i = list.findIndex((x) => x.id === row.id)
+        return { [table]: i === -1 ? [row, ...list] : list.map((x) => (x.id === row.id ? { ...x, ...row } : x)) }
       })
+      const removeLocal = (table, id) => set((s) => ({ [table]: s[table].filter((x) => x.id !== id) }))
+      const failed = (err) => {
+        console.error(err)
+        get().showToast('Could not save. Check your internet and try again.', 'error')
+        if (isCloud) get().reload()
+      }
+      const put = (table, row) => {
+        upsertLocal(table, row)
+        if (isCloud) saveRow(table, row).catch(failed)
+      }
+      const del = (table, id) => {
+        removeLocal(table, id)
+        if (isCloud) deleteRow(table, id).catch(failed)
+      }
+      const log = (entry) => put('activity', { id: uid('A'), at: Date.now(), actorId: get().currentUserId, taskId: null, clientId: null, targetId: null, ...entry })
       const emp = (id) => get().employees.find((e) => e.id === id)
 
+      const startCloud = async (email) => {
+        set({ phase: 'loading' })
+        try {
+          const data = await loadAll()
+          const me = data.employees.find((e) => e.active && e.email && e.email.toLowerCase() === email.toLowerCase())
+          if (!me) { set({ ...empty, phase: 'not-on-team', authEmail: email }); return }
+          set({ ...data, currentUserId: me.id, authEmail: email, phase: 'ready' })
+          unsubscribe?.()
+          unsubscribe = subscribe((table, type, row) => (type === 'DELETE' ? removeLocal(table, row.id) : upsertLocal(table, row)))
+        } catch (e) {
+          console.error(e)
+          set({ phase: 'error', authEmail: email })
+        }
+      }
+
       return {
-        ...buildSeed(),
+        ...(isCloud ? empty : buildSeed()),
+        phase: isCloud ? 'loading' : 'login',
         currentUserId: null,
+        authEmail: null,
         theme: 'light',
         lastSeen: {},
         openTaskId: null,
         newTask: null,
         toast: null,
-        showToast: (message) => {
+
+        showToast: (message, tone = 'ok') => {
           const id = Date.now()
-          set({ toast: { id, message } })
-          setTimeout(() => get().toast?.id === id && set({ toast: null }), 2600)
+          set({ toast: { id, message, tone } })
+          setTimeout(() => get().toast?.id === id && set({ toast: null }), 3200)
         },
 
         // ---------- session ----------
-        login: (rawId, password) => {
-          const id = String(rawId).trim().toUpperCase()
-          const user = get().employees.find((e) => e.id === id)
-          if (!user || user.password !== password) return { ok: false, error: 'Wrong employee ID or password.' }
-          if (!user.active) return { ok: false, error: 'This account is deactivated. Ask your admin.' }
-          set({ currentUserId: user.id, openTaskId: null, newTask: null })
+        init: async () => {
+          if (!isCloud) { set({ phase: get().currentUserId ? 'ready' : 'login' }); return }
+          supabase.auth.onAuthStateChange((event, session) => {
+            if (event === 'PASSWORD_RECOVERY') set({ phase: 'recovery' })
+            else if (event === 'SIGNED_OUT') { unsubscribe?.(); set({ ...empty, currentUserId: null, phase: 'login' }) }
+            else if (event === 'SIGNED_IN' && session && get().phase !== 'ready' && get().phase !== 'recovery') startCloud(session.user.email)
+          })
+          const { data } = await supabase.auth.getSession()
+          if (get().phase === 'recovery') return
+          if (data.session) startCloud(data.session.user.email)
+          else set({ phase: 'login' })
+        },
+        reload: () => { const e = get().authEmail; if (isCloud && e) startCloud(e) },
+
+        // demo mode: pick a person
+        demoLogin: (id) => set({ currentUserId: id, phase: 'ready', openTaskId: null, newTask: null }),
+
+        // cloud mode
+        signIn: async (email, password) => {
+          const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password })
+          return error ? { ok: false, error: error.message === 'Invalid login credentials' ? 'Wrong email or password.' : error.message } : { ok: true }
+        },
+        signUp: async (email, password) => {
+          const { data, error } = await supabase.auth.signUp({ email: email.trim(), password, options: { emailRedirectTo: window.location.origin } })
+          if (error) {
+            const notOnTeam = /not on the team hub list|database error/i.test(error.message)
+            return { ok: false, error: notOnTeam ? 'This email is not on the team list. Ask Bidhan to add it in Admin → People.' : error.message }
+          }
+          return { ok: true, needsConfirm: !data.session }
+        },
+        sendReset: async (email) => {
+          const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo: window.location.origin })
+          return error ? { ok: false, error: error.message } : { ok: true }
+        },
+        setNewPassword: async (password) => {
+          const { data, error } = await supabase.auth.updateUser({ password })
+          if (error) return { ok: false, error: error.message }
+          startCloud(data.user.email)
           return { ok: true }
         },
-        logout: () => set({ currentUserId: null, openTaskId: null, newTask: null }),
+        logout: async () => {
+          set({ openTaskId: null, newTask: null })
+          if (isCloud) await supabase.auth.signOut()
+          else set({ currentUserId: null, phase: 'login' })
+        },
+
         toggleTheme: () => set((s) => ({ theme: s.theme === 'dark' ? 'light' : 'dark' })),
         markSeen: () => set((s) => ({ lastSeen: { ...s.lastSeen, [s.currentUserId]: Date.now() } })),
 
@@ -75,71 +143,47 @@ export const useStore = create(
         // ---------- tasks ----------
         createTask: (data) => {
           const s = get()
-          const id = nextId(s.tasks, 'T', 3, 101)
           const task = {
-            id,
-            title: data.title.trim(),
-            description: data.description ?? '',
-            doneWhen: data.doneWhen ?? '',
-            clientId: data.clientId || null,
-            projectId: data.projectId || null,
-            assigneeId: data.assigneeId,
-            assignedById: s.currentUserId,
-            due: data.due || null,
-            priority: data.priority ?? 'medium',
-            status: 'todo',
-            links: data.links ?? [],
-            blocked: null,
-            createdAt: Date.now(),
-            completedAt: null,
+            id: uid('T'), title: data.title.trim(), clientId: data.clientId || null,
+            assigneeId: data.assigneeId || s.currentUserId, assignedById: s.currentUserId,
+            due: data.due || null, status: 'todo', urgent: !!data.urgent, notes: data.notes?.trim() ?? '', links: [],
+            createdAt: Date.now(), updatedAt: Date.now(), completedAt: null,
           }
+          put('tasks', task)
           const self = task.assigneeId === s.currentUserId
-          set({
-            tasks: [task, ...s.tasks],
-            activity: [
-              log({
-                type: 'assigned',
-                text: self ? `created "${task.title}"` : `assigned "${task.title}" to ${firstName(emp(task.assigneeId))}`,
-                taskId: id, clientId: task.clientId, targetId: task.assigneeId,
-              }),
-              ...s.activity,
-            ],
-          })
-          return id
+          log({ type: 'assigned', taskId: task.id, clientId: task.clientId, targetId: task.assigneeId,
+            text: self ? `added "${task.title}"` : `assigned "${task.title}" to ${firstName(emp(task.assigneeId))}` })
+          return task
         },
 
         updateTask: (id, patch) => {
           const s = get()
           const old = s.tasks.find((t) => t.id === id)
           if (!old) return
-          const next = { ...old, ...patch }
-          const entries = []
+          const next = { ...old, ...patch, updatedAt: Date.now() }
           const base = { taskId: id, clientId: next.clientId }
           const notify = s.currentUserId === next.assigneeId ? next.assignedById : next.assigneeId
-
           if (patch.status && patch.status !== old.status) {
             next.completedAt = patch.status === 'done' ? Date.now() : null
-            if (patch.status === 'done') next.blocked = null
-            entries.push(log({ ...base, type: 'status', targetId: notify,
-              text: patch.status === 'done' ? `completed "${next.title}"` : `moved "${next.title}" to ${statusLabel(patch.status)}` }))
+          }
+          put('tasks', next)
+          if (patch.status && patch.status !== old.status) {
+            log({ ...base, type: 'status', targetId: notify,
+              text: patch.status === 'done' ? `completed "${next.title}"` : `moved "${next.title}" to ${statusLabel(patch.status)}` })
           }
           if (patch.assigneeId && patch.assigneeId !== old.assigneeId) {
-            entries.push(log({ ...base, type: 'assigned', targetId: patch.assigneeId,
-              text: `reassigned "${next.title}" from ${firstName(emp(old.assigneeId))} to ${firstName(emp(patch.assigneeId))}` }))
+            log({ ...base, type: 'assigned', targetId: patch.assigneeId,
+              text: `gave "${next.title}" to ${firstName(emp(patch.assigneeId))} (was ${firstName(emp(old.assigneeId))})` })
           }
-          if ('due' in patch && patch.due !== old.due) {
-            entries.push(log({ ...base, type: 'edit', targetId: notify, text: `changed the due date of "${next.title}"` }))
-          }
-          if (patch.priority && patch.priority !== old.priority) {
-            entries.push(log({ ...base, type: 'edit', targetId: notify, text: `set "${next.title}" to ${patch.priority} priority` }))
-          }
-          if ('blocked' in patch && !!patch.blocked !== !!old.blocked) {
-            entries.push(log({ ...base, type: patch.blocked ? 'blocked' : 'unblocked', targetId: patch.blocked ? patch.blocked.onId : notify,
-              text: patch.blocked
-                ? `marked "${next.title}" as blocked — waiting on ${firstName(emp(patch.blocked.onId))}`
-                : `unblocked "${next.title}"` }))
-          }
-          set({ tasks: s.tasks.map((t) => (t.id === id ? next : t)), activity: [...entries, ...s.activity] })
+          if ('due' in patch && patch.due !== old.due) log({ ...base, type: 'edit', targetId: notify, text: `changed the due date of "${next.title}"` })
+        },
+
+        deleteTask: (id) => {
+          const t = get().tasks.find((x) => x.id === id)
+          if (!t) return
+          del('tasks', id)
+          get().comments.filter((c) => c.taskId === id).forEach((c) => removeLocal('comments', c.id))
+          set({ openTaskId: null })
         },
 
         addComment: (taskId, text) => {
@@ -147,87 +191,85 @@ export const useStore = create(
           const task = s.tasks.find((t) => t.id === taskId)
           const body = text.trim()
           if (!task || !body) return
-          const mentioned = s.employees.filter((e) => new RegExp(`@${firstName(e)}\\b`, 'i').test(body) && e.id !== s.currentUserId)
-          const targets = mentioned.length
-            ? mentioned.map((e) => e.id)
-            : [s.currentUserId === task.assigneeId ? task.assignedById : task.assigneeId]
-          set({
-            comments: [...s.comments, { id: `CM-${Date.now()}`, taskId, authorId: s.currentUserId, text: body, at: Date.now() }],
-            activity: [
-              ...targets.map((targetId) => log({ type: 'comment', taskId, clientId: task.clientId, targetId,
-                text: `${mentioned.length ? 'mentioned you on' : 'commented on'} "${task.title}"` })),
-              ...s.activity,
-            ],
-          })
+          put('comments', { id: uid('CM'), taskId, authorId: s.currentUserId, text: body, at: Date.now() })
+          const mentioned = s.employees.filter((e) => e.id !== s.currentUserId && new RegExp(`@${firstName(e)}\\b`, 'i').test(body))
+          const targets = mentioned.length ? mentioned.map((e) => e.id) : [s.currentUserId === task.assigneeId ? task.assignedById : task.assigneeId]
+          targets.filter((x) => x && x !== s.currentUserId).forEach((targetId) =>
+            log({ type: 'comment', taskId, clientId: task.clientId, targetId, text: `${mentioned.length ? 'mentioned you on' : 'commented on'} "${task.title}"` }))
         },
+
+        // ---------- daily updates ----------
+        saveUpdate: (clientId, text, date = todayIso()) => {
+          const s = get()
+          const id = `U-${date}-${s.currentUserId}-${clientId ?? 'general'}`
+          const body = text.trim()
+          if (!body) { if (s.updates.some((u) => u.id === id)) del('updates', id); return }
+          put('updates', { id, employeeId: s.currentUserId, clientId: clientId ?? null, date, text: body, at: Date.now() })
+        },
+
+        // ---------- post calendar ----------
+        savePost: (post) => put('posts', { id: post.id ?? uid('PO'), createdBy: get().currentUserId, at: Date.now(), note: '', ...post }),
+        deletePost: (id) => del('posts', id),
 
         // ---------- people ----------
         createEmployee: (data) => {
           const s = get()
-          const id = nextId(s.employees, 'BM', 3)
           const palette = ['#2F80ED', '#E0447C', '#0E9F8E', '#8E44AD', '#C77D0A', '#D9480F', '#1F9D55', '#5F3DC4']
-          set({
-            employees: [...s.employees, {
-              id, name: data.name.trim(), role: data.role ?? 'employee', title: data.title ?? '', team: data.team,
-              headId: data.headId || null, color: palette[s.employees.length % palette.length], active: true,
-              password: data.password || 'demo123',
-            }],
-            activity: [log({ type: 'people', text: `added ${data.name.trim()} (${id}) to ${data.team}`, targetId: data.headId || null }), ...s.activity],
-          })
-          return id
+          const row = {
+            id: nextId(s.employees, 'BM', 3), name: data.name.trim(), title: data.title?.trim() ?? '', department: data.department,
+            role: data.role ?? 'member', headId: data.headId || null, email: data.email?.trim().toLowerCase() || null, phone: data.phone?.trim() ?? '',
+            color: palette[s.employees.length % palette.length], active: true, createdAt: Date.now(),
+          }
+          put('employees', row)
+          log({ type: 'people', text: `added ${row.name} to ${row.department}` })
+          return row.id
         },
-        updateEmployee: (id, patch) => set((s) => ({ employees: s.employees.map((e) => (e.id === id ? { ...e, ...patch } : e)) })),
+        updateEmployee: (id, patch) => {
+          const e = get().employees.find((x) => x.id === id)
+          if (!e) return
+          const clean = { ...patch }
+          if ('email' in clean) clean.email = clean.email?.trim().toLowerCase() || null
+          put('employees', { ...e, ...clean })
+        },
 
-        // ---------- clients & projects ----------
+        // ---------- clients ----------
         createClient: (data) => {
           const s = get()
-          const id = nextId(s.clients, 'C')
           const palette = ['#2F80ED', '#E0447C', '#0E9F8E', '#8E44AD', '#C77D0A', '#D9480F', '#1F9D55']
-          const now = new Date()
-          const since = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-          set({
-            clients: [...s.clients, {
-              id, name: data.name.trim(), industry: data.industry ?? '', services: data.services ?? [],
-              ownerId: data.ownerId, since, color: palette[s.clients.length % palette.length], brief: data.brief ?? '',
-            }],
-            activity: [log({ type: 'client', clientId: id, targetId: data.ownerId,
-              text: `added client ${data.name.trim()} and assigned it to ${firstName(emp(data.ownerId))}` }), ...s.activity],
-          })
-          return id
+          const row = {
+            id: nextId(s.clients, 'C', 2), name: data.name.trim(), services: data.services ?? [], ownerId: data.ownerId || null,
+            memberIds: [...new Set([data.ownerId, ...(data.memberIds ?? [])].filter(Boolean))],
+            deliverables: data.deliverables ?? '', ads: data.ads ?? '', brief: data.brief ?? '',
+            color: palette[s.clients.length % palette.length], active: true, createdAt: Date.now(),
+          }
+          put('clients', row)
+          log({ type: 'client', clientId: row.id, targetId: row.ownerId, text: `added client ${row.name}` })
+          return row.id
         },
-        updateClient: (id, patch) => set((s) => ({ clients: s.clients.map((c) => (c.id === id ? { ...c, ...patch } : c)) })),
-        reassignClient: (clientId, ownerId, note = '') => {
-          const s = get()
-          const client = s.clients.find((c) => c.id === clientId)
-          if (!client || client.ownerId === ownerId) return
-          set({
-            clients: s.clients.map((c) => (c.id === clientId ? { ...c, ownerId } : c)),
-            activity: [log({ type: 'client', clientId, targetId: ownerId,
-              text: `assigned client ${client.name} to ${firstName(emp(ownerId))}${note.trim() ? ` — handover: ${note.trim()}` : ''}` }), ...s.activity],
-          })
+        updateClient: (id, patch) => {
+          const c = get().clients.find((x) => x.id === id)
+          if (!c) return
+          const next = { ...c, ...patch }
+          next.memberIds = [...new Set([next.ownerId, ...(next.memberIds ?? [])].filter(Boolean))]
+          put('clients', next)
+          if (patch.ownerId && patch.ownerId !== c.ownerId) {
+            log({ type: 'client', clientId: id, targetId: patch.ownerId, text: `made ${firstName(emp(patch.ownerId))} the account manager for ${c.name}` })
+          }
         },
-        createProject: (data) => {
-          const s = get()
-          const id = nextId(s.projects, 'P')
-          const client = s.clients.find((c) => c.id === data.clientId)
-          set({
-            projects: [...s.projects, { id, clientId: data.clientId, name: data.name.trim(), service: data.service, memberIds: data.memberIds ?? [], status: 'active' }],
-            activity: [log({ type: 'project', clientId: data.clientId, text: `created project "${data.name.trim()}" for ${client?.name ?? 'a client'}` }), ...s.activity],
-          })
-          return id
-        },
-        updateProject: (id, patch) => set((s) => ({ projects: s.projects.map((p) => (p.id === id ? { ...p, ...patch } : p)) })),
 
         resetDemo: () => set({ ...buildSeed(), lastSeen: {}, openTaskId: null, newTask: null }),
       }
     },
     {
-      name: 'team-hub-v1',
-      partialize: ({ openTaskId, newTask, toast, ...rest }) => rest,
+      name: isCloud ? 'team-hub-cloud' : 'team-hub-demo-v2',
+      partialize: (s) => (isCloud
+        ? { theme: s.theme, lastSeen: s.lastSeen }
+        : { theme: s.theme, lastSeen: s.lastSeen, currentUserId: s.currentUserId, ...Object.fromEntries(DATA_KEYS.map((k) => [k, s[k]])) }),
     },
   ),
 )
 
-// ---------- small selectors / hooks ----------
+// ---------- small hooks ----------
 export const useCurrentUser = () => useStore((s) => s.employees.find((e) => e.id === s.currentUserId) ?? null)
 export const useEmployee = (id) => useStore((s) => s.employees.find((e) => e.id === id) ?? null)
+export const useClient = (id) => useStore((s) => s.clients.find((c) => c.id === id) ?? null)

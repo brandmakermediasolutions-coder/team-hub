@@ -1,184 +1,141 @@
 import { useMemo, useState } from 'react'
-import { Plus, Users, Building2, FolderKanban, ChartColumn, RotateCcw, Check, UserPlus, ListChecks, CircleAlert } from 'lucide-react'
+import { Users, Building2, Settings, UserPlus, Plus, Pencil, Database, Mail, RotateCcw, CircleCheck, CircleAlert } from 'lucide-react'
 import { useStore, useCurrentUser } from '../store/useStore'
-import { TEAMS, SERVICES, STATUSES } from '../store/seed'
+import { DEPARTMENTS, emailFor } from '../store/seed'
 import { ROLE_LABEL } from '../lib/permissions'
-import { daysUntil } from '../lib/date'
-import { Avatar, AvatarStack, StatusBadge, Modal, Field, Empty, PageMotion, ClientTag } from '../components/ui'
+import { isCloud } from '../lib/backend'
+import { Avatar, AvatarStack, Field, Modal, PageMotion } from '../components/ui'
+import { PeopleOptions } from '../components/NewTaskModal'
+import ClientForm from '../components/ClientForm'
 
-const ROLE_TONE = { admin: 'tone-accent', head: 'tone-violet', employee: 'tone-grey' }
-const WEEK = 7 * 24 * 3600000
+const RANK = { admin: 0, head: 1, member: 2 }
+const ROLE_TONE = { admin: 'tone-accent', head: 'tone-violet', member: 'tone-grey' }
 
-const toggle = (list, v) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v])
+function PersonForm({ person, open, onClose }) {
+  const me = useCurrentUser()
+  const employees = useStore((s) => s.employees)
+  const createEmployee = useStore((s) => s.createEmployee)
+  const updateEmployee = useStore((s) => s.updateEmployee)
+  const showToast = useStore((s) => s.showToast)
+  const initial = () => (person
+    ? { name: person.name, title: person.title, department: person.department, role: person.role, headId: person.headId ?? '', email: person.email ?? '', phone: person.phone ?? '', active: person.active }
+    : { name: '', title: '', department: 'Social Media', role: 'member', headId: '', email: '', phone: '', active: true })
+  const [f, setF] = useState(initial)
+  const [emailTouched, setEmailTouched] = useState(!!person)
+  const [tried, setTried] = useState(false)
+  const [lastKey, setLastKey] = useState(null)
+  const key = `${open}-${person?.id ?? 'new'}`
+  if (key !== lastKey) { setLastKey(key); setF(initial()); setEmailTouched(!!person); setTried(false) }
 
-function Pill({ on, onChange, children }) {
+  const self = person?.id === me.id
+  const set = (k) => (e) => setF((x) => {
+    const v = e.target.type === 'checkbox' ? e.target.checked : e.target.value
+    const next = { ...x, [k]: v }
+    if (k === 'name' && !emailTouched) next.email = emailFor(v)
+    return next
+  })
+  const emailTaken = f.email && employees.some((e) => e.id !== person?.id && (e.email ?? '').toLowerCase() === f.email.trim().toLowerCase())
+
+  const save = () => {
+    setTried(true)
+    if (!f.name.trim() || emailTaken) return
+    const data = { ...f, name: f.name.trim(), title: f.title.trim(), headId: f.headId || null }
+    if (person) { updateEmployee(person.id, data); showToast(`${data.name} saved`) }
+    else { createEmployee(data); showToast(`${data.name} added. They can now create a password on the sign-in page.`) }
+    onClose()
+  }
+
   return (
-    <label className={`check ${on ? 'on' : ''}`}>
-      <input type="checkbox" checked={on} onChange={onChange} />
-      {on && <Check size={13} />}
-      {children}
-    </label>
+    <Modal open={open} onClose={onClose} title={person ? `Edit ${person.name}` : 'Add person'} width={560}
+      footer={<><button className="btn btn-ghost" onClick={onClose}>Cancel</button><button className="btn btn-primary" onClick={save}>Save</button></>}>
+      <div className="form-grid">
+        <Field label="Full name">
+          <input className="input" value={f.name} onChange={set('name')} autoFocus />
+          {tried && !f.name.trim() && <span className="error-text">Add a name.</span>}
+        </Field>
+        <Field label="Designation"><input className="input" value={f.title} onChange={set('title')} placeholder="e.g. Social Media Manager" /></Field>
+        <Field label="Work email" hint="Used to sign in and for task emails.">
+          <input className="input" type="email" value={f.email} onChange={(e) => { setEmailTouched(true); set('email')(e) }} />
+          {emailTaken && <span className="error-text">Someone else already uses this email.</span>}
+        </Field>
+        <Field label="Phone (optional)"><input className="input" value={f.phone} onChange={set('phone')} /></Field>
+        <Field label="Department">
+          <select className="select" value={f.department} onChange={set('department')}>{DEPARTMENTS.map((d) => <option key={d}>{d}</option>)}</select>
+        </Field>
+        <Field label="Reports to">
+          <select className="select" value={f.headId} onChange={set('headId')}>
+            <option value="">No one</option>
+            <PeopleOptions employees={employees.filter((e) => e.id !== person?.id)} />
+          </select>
+        </Field>
+        <Field label="Access" hint={f.role === 'admin' ? 'Sees and edits everything, including this page.' : f.role === 'head' ? 'Sees the Team page for the people who report to them.' : 'Sees their own work and all clients.'}>
+          <select className="select" value={f.role} onChange={set('role')} disabled={self}>
+            <option value="member">Member</option><option value="head">Head</option><option value="admin">Admin</option>
+          </select>
+        </Field>
+        {person && !self && (
+          <Field label="Status">
+            <label className={`check ${!f.active ? 'on' : ''}`} style={{ alignSelf: 'flex-start' }}>
+              <input type="checkbox" checked={!f.active} onChange={(e) => setF((x) => ({ ...x, active: !e.target.checked }))} />Left the team (can't sign in)
+            </label>
+          </Field>
+        )}
+      </div>
+    </Modal>
   )
 }
 
 export default function Admin() {
   const employees = useStore((s) => s.employees)
   const clients = useStore((s) => s.clients)
-  const projects = useStore((s) => s.projects)
   const tasks = useStore((s) => s.tasks)
-  const createEmployee = useStore((s) => s.createEmployee)
-  const updateEmployee = useStore((s) => s.updateEmployee)
-  const createClient = useStore((s) => s.createClient)
-  const reassignClient = useStore((s) => s.reassignClient)
-  const createProject = useStore((s) => s.createProject)
   const resetDemo = useStore((s) => s.resetDemo)
-  const me = useCurrentUser()
+  const [tab, setTab] = useState('people')
+  const [personModal, setPersonModal] = useState(null) // { person } | null
+  const [clientModal, setClientModal] = useState(null)
+  const [showLeft, setShowLeft] = useState(false)
 
-  const [tab, setTab] = useState('employees')
-  const [modal, setModal] = useState(null) // 'employee' | 'client' | 'project'
-  const [justAdded, setJustAdded] = useState(null)
-
-  const [emp, setEmp] = useState({})
-  const [cli, setCli] = useState({})
-  const [prj, setPrj] = useState({})
-
-  const activeEmployees = useMemo(() => employees.filter((e) => e.active), [employees])
-  const leaders = useMemo(() => activeEmployees.filter((e) => e.role === 'head' || e.role === 'admin'), [activeEmployees])
   const byId = useMemo(() => Object.fromEntries(employees.map((e) => [e.id, e])), [employees])
-
-  const isOpen = (t) => t.status !== 'done'
-  const isOverdue = (t) => isOpen(t) && t.due && daysUntil(t.due) < 0
-
-  const stats = useMemo(() => ({
-    open: tasks.filter(isOpen).length,
-    overdue: tasks.filter(isOverdue).length,
-  }), [tasks])
-
-  const openByPerson = useMemo(() => {
+  const openBy = useMemo(() => {
     const m = {}
-    tasks.forEach((t) => { if (isOpen(t)) m[t.assigneeId] = (m[t.assigneeId] || 0) + 1 })
+    tasks.forEach((t) => { if (t.status !== 'done') m[t.assigneeId] = (m[t.assigneeId] || 0) + 1 })
     return m
   }, [tasks])
-
-  const workload = useMemo(() => {
-    const now = Date.now()
-    return activeEmployees.map((e) => {
-      const mine = tasks.filter((t) => t.assigneeId === e.id)
-      const seg = { todo: 0, progress: 0, review: 0 }
-      mine.forEach((t) => { if (t.status in seg) seg[t.status]++ })
-      return {
-        e, seg,
-        open: seg.todo + seg.progress + seg.review,
-        overdue: mine.filter(isOverdue).length,
-        done7: mine.filter((t) => t.status === 'done' && t.completedAt && now - t.completedAt <= WEEK).length,
-      }
-    }).sort((a, b) => b.open - a.open)
-  }, [activeEmployees, tasks])
-
-  const clientStats = useMemo(() => clients.map((c) => {
-    const mine = tasks.filter((t) => t.clientId === c.id)
-    return { c, open: mine.filter(isOpen).length, overdue: mine.filter(isOverdue).length, done: mine.filter((t) => t.status === 'done').length }
-  }), [clients, tasks])
-
-  const maxOpen = Math.max(1, ...workload.map((w) => w.open))
-
-  const openModal = (kind) => {
-    if (kind === 'employee') setEmp({ name: '', title: '', team: TEAMS[0], role: 'employee', headId: leaders[0]?.id ?? '', password: 'demo123' })
-    if (kind === 'client') setCli({ name: '', industry: '', services: [], ownerId: leaders[0]?.id ?? activeEmployees[0]?.id ?? '', brief: '' })
-    if (kind === 'project') setPrj({ clientId: clients[0]?.id ?? '', name: '', service: SERVICES[0], memberIds: [] })
-    setModal(kind)
-  }
-
-  const saveEmployee = () => {
-    if (!emp.name.trim()) return
-    const id = createEmployee({ ...emp, password: emp.password || 'demo123' })
-    setJustAdded({ id, name: emp.name.trim() })
-    setModal(null)
-  }
-  const saveClient = () => {
-    if (!cli.name.trim() || !cli.ownerId) return
-    createClient(cli)
-    setModal(null)
-  }
-  const saveProject = () => {
-    if (!prj.name.trim() || !prj.clientId) return
-    createProject(prj)
-    setModal(null)
-  }
-
-  const reset = () => {
-    if (window.confirm('Reset all demo data? This replaces everything with the original sample data.')) resetDemo()
-  }
-
-  const footer = (onSave, label) => (
-    <>
-      <button className="btn btn-ghost" onClick={() => setModal(null)}>Cancel</button>
-      <button className="btn btn-primary" onClick={onSave}>{label}</button>
-    </>
-  )
+  const people = employees.filter((e) => (showLeft ? !e.active : e.active))
+    .sort((a, b) => DEPARTMENTS.indexOf(a.department) - DEPARTMENTS.indexOf(b.department) || RANK[a.role] - RANK[b.role] || a.name.localeCompare(b.name))
 
   return (
     <PageMotion>
-      <div className="page-head">
-        <div>
-          <h1>Admin</h1>
-          <div className="page-sub">Manage people, clients and projects.</div>
-        </div>
-        <button className="btn btn-ghost" onClick={reset}><RotateCcw size={15} /> Reset demo data</button>
-      </div>
-
-      <div className="grid grid-4">
-        <div className="card stat"><div className="stat-label"><Users /> Active employees</div><div className="stat-value">{activeEmployees.length}</div></div>
-        <div className="card stat"><div className="stat-label"><Building2 /> Clients</div><div className="stat-value">{clients.length}</div></div>
-        <div className="card stat"><div className="stat-label"><ListChecks /> Open tasks</div><div className="stat-value">{stats.open}</div></div>
-        <div className={`card stat ${stats.overdue ? 'is-alert' : ''}`}><div className="stat-label"><CircleAlert /> Overdue tasks</div><div className="stat-value">{stats.overdue}</div></div>
-      </div>
+      <div className="page-head"><div><h1>Admin</h1><p className="page-sub">People, clients and setup. Changes apply for everyone straight away.</p></div></div>
 
       <div className="tabs">
-        <button className={`tab ${tab === 'employees' ? 'active' : ''}`} onClick={() => setTab('employees')}><Users /> Employees</button>
-        <button className={`tab ${tab === 'clients' ? 'active' : ''}`} onClick={() => setTab('clients')}><Building2 /> Clients</button>
-        <button className={`tab ${tab === 'projects' ? 'active' : ''}`} onClick={() => setTab('projects')}><FolderKanban /> Projects</button>
-        <button className={`tab ${tab === 'reports' ? 'active' : ''}`} onClick={() => setTab('reports')}><ChartColumn /> Reports</button>
+        <button className={`tab ${tab === 'people' ? 'active' : ''}`} onClick={() => setTab('people')}><Users />People</button>
+        <button className={`tab ${tab === 'clients' ? 'active' : ''}`} onClick={() => setTab('clients')}><Building2 />Clients</button>
+        <button className={`tab ${tab === 'setup' ? 'active' : ''}`} onClick={() => setTab('setup')}><Settings />Setup</button>
       </div>
 
-      {tab === 'employees' && (
+      {tab === 'people' && (
         <div className="stack">
-          <div className="row" style={{ justifyContent: 'space-between' }}>
-            <div className="small muted">{employees.length} people</div>
-            <button className="btn btn-primary btn-sm" onClick={() => openModal('employee')}><UserPlus size={15} /> Add employee</button>
+          <div className="row between">
+            <button className="btn btn-ghost btn-sm" onClick={() => setShowLeft((x) => !x)}>{showLeft ? 'Show current team' : 'Show people who left'}</button>
+            <button className="btn btn-primary btn-sm" onClick={() => setPersonModal({ person: null })}><UserPlus />Add person</button>
           </div>
-          {justAdded && (
-            <div className="small" style={{ color: 'var(--green)', fontWeight: 600 }}>
-              <Check size={14} style={{ verticalAlign: '-2px' }} /> {justAdded.name} added. Their employee ID is <span className="mono">{justAdded.id}</span>.
-            </div>
-          )}
           <div className="card table-wrap">
             <table className="table">
-              <thead><tr><th>Person</th><th>Employee ID</th><th>Team</th><th>Role</th><th>Reports to</th><th>Open tasks</th><th>Status</th><th /></tr></thead>
+              <thead><tr><th>Person</th><th>Email</th><th>Department</th><th>Reports to</th><th>Access</th><th>Open tasks</th><th /></tr></thead>
               <tbody>
-                {employees.map((e) => (
-                  <tr key={e.id}>
-                    <td>
-                      <div className="row" style={{ gap: 10 }}>
-                        <Avatar id={e.id} size={30} />
-                        <div><b>{e.name}</b><div className="tiny muted">{e.title}</div></div>
-                      </div>
-                    </td>
-                    <td className="mono">{e.id}</td>
-                    <td>{e.team}</td>
-                    <td><span className={`badge ${ROLE_TONE[e.role]}`}>{ROLE_LABEL[e.role]}</span></td>
+                {people.map((e) => (
+                  <tr key={e.id} className="click-row" onClick={() => setPersonModal({ person: e })}>
+                    <td><div className="row" style={{ gap: 10 }}><Avatar id={e.id} size={30} /><div><b>{e.name}</b><div className="tiny muted">{e.title}</div></div></div></td>
+                    <td className="small">{e.email || <span className="muted">Not set</span>}</td>
+                    <td>{e.department}</td>
                     <td>{byId[e.headId]?.name ?? <span className="muted">—</span>}</td>
-                    <td>{openByPerson[e.id] || 0}</td>
-                    <td><span className={`badge ${e.active ? 'tone-green' : 'tone-grey'}`}>{e.active ? 'Active' : 'Inactive'}</span></td>
-                    <td style={{ textAlign: 'right' }}>
-                      {e.id !== me?.id && (
-                        <button className="btn btn-ghost btn-sm" onClick={() => updateEmployee(e.id, { active: !e.active })}>
-                          {e.active ? 'Deactivate' : 'Activate'}
-                        </button>
-                      )}
-                    </td>
+                    <td><span className={`badge ${ROLE_TONE[e.role]}`}>{ROLE_LABEL[e.role]}</span></td>
+                    <td>{openBy[e.id] || 0}</td>
+                    <td style={{ textAlign: 'right' }}><button className="btn btn-ghost btn-sm"><Pencil />Edit</button></td>
                   </tr>
                 ))}
+                {people.length === 0 && <tr><td colSpan={7} className="muted">Nobody here.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -187,27 +144,22 @@ export default function Admin() {
 
       {tab === 'clients' && (
         <div className="stack">
-          <div className="row" style={{ justifyContent: 'space-between' }}>
-            <div className="small muted">{clients.length} clients</div>
-            <button className="btn btn-primary btn-sm" onClick={() => openModal('client')}><Plus size={15} /> Add client</button>
+          <div className="row between">
+            <div className="small muted">{clients.filter((c) => c.active).length} active · {clients.filter((c) => !c.active).length} paused</div>
+            <button className="btn btn-primary btn-sm" onClick={() => setClientModal({ client: null })}><Plus />Add client</button>
           </div>
           <div className="card table-wrap">
             <table className="table">
-              <thead><tr><th>Client</th><th>Industry</th><th>Services</th><th>Account owner</th><th>Open tasks</th></tr></thead>
+              <thead><tr><th>Client</th><th>Services</th><th>Account manager</th><th>Team</th><th>Status</th><th /></tr></thead>
               <tbody>
-                {clientStats.map(({ c, open }) => (
-                  <tr key={c.id}>
+                {[...clients].sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name)).map((c) => (
+                  <tr key={c.id} className="click-row" onClick={() => setClientModal({ client: c })}>
                     <td><div className="row" style={{ gap: 8 }}><span className="client-dot" style={{ background: c.color }} /><b>{c.name}</b></div></td>
-                    <td>{c.industry || <span className="muted">—</span>}</td>
-                    <td><div className="row" style={{ gap: 4, flexWrap: 'wrap' }}>{c.services.map((s) => <span key={s} className="chip">{s}</span>)}</div></td>
-                    <td>
-                      <select className="select select-sm" value={c.ownerId} onChange={(ev) => reassignClient(c.id, ev.target.value)}>
-                        {activeEmployees.concat(activeEmployees.some((e) => e.id === c.ownerId) ? [] : [byId[c.ownerId]].filter(Boolean)).map((e) => (
-                          <option key={e.id} value={e.id}>{e.name}</option>
-                        ))}
-                      </select>
-                    </td>
-                    <td>{open}</td>
+                    <td><div className="row row-wrap" style={{ gap: 4 }}>{c.services.map((s) => <span key={s} className="chip">{s}</span>)}</div></td>
+                    <td>{byId[c.ownerId]?.name ?? <span className="muted">—</span>}</td>
+                    <td><AvatarStack ids={c.memberIds ?? []} max={4} /></td>
+                    <td><span className={`badge ${c.active ? 'tone-green' : 'tone-grey'}`}>{c.active ? 'Active' : 'Paused'}</span></td>
+                    <td style={{ textAlign: 'right' }}><button className="btn btn-ghost btn-sm"><Pencil />Edit</button></td>
                   </tr>
                 ))}
               </tbody>
@@ -216,156 +168,30 @@ export default function Admin() {
         </div>
       )}
 
-      {tab === 'projects' && (
-        <div className="stack">
-          <div className="row" style={{ justifyContent: 'space-between' }}>
-            <div className="small muted">{projects.length} projects</div>
-            <button className="btn btn-primary btn-sm" onClick={() => openModal('project')}><Plus size={15} /> Add project</button>
+      {tab === 'setup' && (
+        <div className="grid grid-2">
+          <div className="card card-pad stack">
+            <h2 className="row"><Database size={16} />Shared database</h2>
+            {isCloud
+              ? <div className="row ok-text"><CircleCheck size={16} />Connected. Everyone sees the same data, live.</div>
+              : <div className="row" style={{ color: 'var(--amber)' }}><CircleAlert size={16} />Demo mode. Data is saved in this browser only.</div>}
+            <p className="small soft">To connect, follow SETUP.md in the GitHub repo (about 15 minutes, done once).</p>
+            {!isCloud && <button className="btn btn-sm" style={{ alignSelf: 'flex-start' }} onClick={() => window.confirm('Reset all demo data to the starting data?') && resetDemo()}><RotateCcw />Reset demo data</button>}
           </div>
-          <div className="card table-wrap">
-            <table className="table">
-              <thead><tr><th>Project</th><th>Client</th><th>Service</th><th>Members</th><th>Tasks done</th></tr></thead>
-              <tbody>
-                {projects.map((p) => {
-                  const pt = tasks.filter((t) => t.projectId === p.id)
-                  return (
-                    <tr key={p.id}>
-                      <td><b>{p.name}</b></td>
-                      <td><ClientTag clientId={p.clientId} /></td>
-                      <td><span className="badge tone-grey">{p.service}</span></td>
-                      <td><AvatarStack ids={p.memberIds} /></td>
-                      <td>{pt.filter((t) => t.status === 'done').length} / {pt.length}</td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+          <div className="card card-pad stack">
+            <h2 className="row"><Mail size={16} />Task emails</h2>
+            <p className="small soft">When someone gives a task to a teammate (new or reassigned), the teammate gets an email with the task, client, due date and a link that opens it.</p>
+            <p className="small soft">Emails go to each person's work email in People. Sending is set up in Supabase (see SETUP.md, step 5).</p>
+          </div>
+          <div className="card card-pad stack">
+            <h2 className="row"><Users size={16} />How sign-in works</h2>
+            <p className="small soft">1. Add the person here with their work email.<br />2. They open Team Hub, choose “First time? Create password”, and confirm from their inbox.<br />3. If someone leaves, edit them and tick “Left the team”. They can no longer sign in, and their history stays.</p>
           </div>
         </div>
       )}
 
-      {tab === 'reports' && (
-        <div className="stack">
-          <div className="card">
-            <div className="card-head"><h3>Workload &amp; delivery by person</h3></div>
-            <div className="card-body">
-              <div className="row small muted" style={{ gap: 14, marginBottom: 10, flexWrap: 'wrap' }}>
-                {[['To do', 'var(--grey)'], ['In progress', 'var(--blue)'], ['In review', 'var(--amber)']].map(([l, c]) => (
-                  <span key={l} className="row" style={{ gap: 6 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: c }} />{l}</span>
-                ))}
-              </div>
-              {workload.length === 0 ? <Empty icon={Users} title="No active employees" /> : (
-                <div className="stack">
-                  {workload.map(({ e, seg, open, overdue, done7 }) => (
-                    <div key={e.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(150px, 1.1fr) 2fr auto', gap: 16, alignItems: 'center' }}>
-                      <div className="row" style={{ gap: 10, minWidth: 0 }}>
-                        <Avatar id={e.id} size={28} />
-                        <div style={{ minWidth: 0 }}><b className="truncate">{e.name}</b><div className="tiny muted truncate">{e.title}</div></div>
-                      </div>
-                      <div className="load-bar" style={{ width: `${Math.max(8, (open / maxOpen) * 100)}%` }}>
-                        {open > 0 && [['todo', 'var(--grey)'], ['progress', 'var(--blue)'], ['review', 'var(--amber)']].map(([k, col]) => (
-                          seg[k] > 0 ? <span key={k} style={{ width: `${(seg[k] / open) * 100}%`, background: col }} title={`${STATUSES.find((s) => s.id === k).label}: ${seg[k]}`} /> : null
-                        ))}
-                      </div>
-                      <div className="row small" style={{ gap: 16, whiteSpace: 'nowrap' }}>
-                        <span><b>{open}</b> <span className="muted">open</span></span>
-                        <span style={overdue > 0 ? { color: 'var(--red)', fontWeight: 600 } : undefined}>{overdue} <span className={overdue > 0 ? '' : 'muted'}>overdue</span></span>
-                        <span><b>{done7}</b> <span className="muted">done (7d)</span></span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="card">
-            <div className="card-head"><h3>By client</h3></div>
-            <div className="card-body table-wrap">
-              <table className="table">
-                <thead><tr><th>Client</th><th>Open</th><th>Overdue</th><th>Done</th></tr></thead>
-                <tbody>
-                  {clientStats.map(({ c, open, overdue, done }) => (
-                    <tr key={c.id}>
-                      <td><ClientTag clientId={c.id} /></td>
-                      <td>{open}</td>
-                      <td style={overdue > 0 ? { color: 'var(--red)', fontWeight: 600 } : undefined}>{overdue}</td>
-                      <td>{done}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <Modal open={modal === 'employee'} onClose={() => setModal(null)} title="Add employee" footer={footer(saveEmployee, 'Add employee')}>
-        <div className="form-grid">
-          <Field label="Full name" className="span-2"><input className="input" autoFocus value={emp.name ?? ''} onChange={(e) => setEmp({ ...emp, name: e.target.value })} /></Field>
-          <Field label="Job title"><input className="input" value={emp.title ?? ''} onChange={(e) => setEmp({ ...emp, title: e.target.value })} /></Field>
-          <Field label="Team">
-            <select className="select" value={emp.team ?? ''} onChange={(e) => setEmp({ ...emp, team: e.target.value })}>
-              {TEAMS.map((t) => <option key={t}>{t}</option>)}
-            </select>
-          </Field>
-          <Field label="Role">
-            <select className="select" value={emp.role ?? 'employee'} onChange={(e) => setEmp({ ...emp, role: e.target.value })}>
-              {['employee', 'head', 'admin'].map((r) => <option key={r} value={r}>{ROLE_LABEL[r]}</option>)}
-            </select>
-          </Field>
-          <Field label="Reports to">
-            <select className="select" value={emp.headId ?? ''} onChange={(e) => setEmp({ ...emp, headId: e.target.value })}>
-              <option value="">Nobody</option>
-              {leaders.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
-            </select>
-          </Field>
-          <Field label="Temporary password" className="span-2" hint="They'll use this with their new employee ID to log in.">
-            <input className="input" value={emp.password ?? ''} onChange={(e) => setEmp({ ...emp, password: e.target.value })} />
-          </Field>
-        </div>
-      </Modal>
-
-      <Modal open={modal === 'client'} onClose={() => setModal(null)} title="Add client" footer={footer(saveClient, 'Add client')}>
-        <div className="form-grid">
-          <Field label="Client name"><input className="input" autoFocus value={cli.name ?? ''} onChange={(e) => setCli({ ...cli, name: e.target.value })} /></Field>
-          <Field label="Industry"><input className="input" value={cli.industry ?? ''} onChange={(e) => setCli({ ...cli, industry: e.target.value })} /></Field>
-          <div className="field span-2">
-            <span className="label">Services</span>
-            <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
-              {SERVICES.map((s) => <Pill key={s} on={(cli.services ?? []).includes(s)} onChange={() => setCli({ ...cli, services: toggle(cli.services ?? [], s) })}>{s}</Pill>)}
-            </div>
-          </div>
-          <Field label="Account owner" className="span-2">
-            <select className="select" value={cli.ownerId ?? ''} onChange={(e) => setCli({ ...cli, ownerId: e.target.value })}>
-              {activeEmployees.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
-            </select>
-          </Field>
-          <Field label="Brief" className="span-2"><textarea className="textarea" rows={3} value={cli.brief ?? ''} onChange={(e) => setCli({ ...cli, brief: e.target.value })} /></Field>
-        </div>
-      </Modal>
-
-      <Modal open={modal === 'project'} onClose={() => setModal(null)} title="Add project" footer={footer(saveProject, 'Add project')}>
-        <div className="form-grid">
-          <Field label="Client">
-            <select className="select" value={prj.clientId ?? ''} onChange={(e) => setPrj({ ...prj, clientId: e.target.value })}>
-              {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-          </Field>
-          <Field label="Service">
-            <select className="select" value={prj.service ?? ''} onChange={(e) => setPrj({ ...prj, service: e.target.value })}>
-              {SERVICES.map((s) => <option key={s}>{s}</option>)}
-            </select>
-          </Field>
-          <Field label="Project name" className="span-2"><input className="input" autoFocus value={prj.name ?? ''} onChange={(e) => setPrj({ ...prj, name: e.target.value })} /></Field>
-          <div className="field span-2">
-            <span className="label">Members</span>
-            <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
-              {activeEmployees.map((e) => <Pill key={e.id} on={(prj.memberIds ?? []).includes(e.id)} onChange={() => setPrj({ ...prj, memberIds: toggle(prj.memberIds ?? [], e.id) })}>{e.name}</Pill>)}
-            </div>
-          </div>
-        </div>
-      </Modal>
+      <PersonForm open={!!personModal} person={personModal?.person ?? null} onClose={() => setPersonModal(null)} />
+      <ClientForm open={!!clientModal} client={clientModal?.client ?? null} onClose={() => setClientModal(null)} />
     </PageMotion>
   )
 }

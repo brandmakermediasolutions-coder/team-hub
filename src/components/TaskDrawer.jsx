@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { X, User, UserCheck, Calendar, Flag, Building2, Target, Link2, Send, Ban, Check, Plus } from 'lucide-react'
+import { X, User, UserCheck, Calendar, Building2, Link2, Send, Plus, Flame, Trash2 } from 'lucide-react'
 import { useStore, useCurrentUser } from '../store/useStore'
-import { STATUSES, PRIORITIES } from '../store/seed'
-import { canEditTask, canReassign, assignableEmployees } from '../lib/permissions'
+import { STATUSES } from '../store/seed'
+import { canEditTask, canDeleteTask } from '../lib/permissions'
 import { relTime } from '../lib/date'
-import { Avatar, BlockedNote, ClientTag, Due, PriorityBadge } from './ui'
+import { Avatar, ClientTag, Due } from './ui'
+import { PeopleOptions } from './NewTaskModal'
 
 function Person({ id }) {
   const e = useStore((s) => s.employees.find((x) => x.id === id))
@@ -13,33 +14,27 @@ function Person({ id }) {
 }
 
 function CommentText({ text }) {
-  const parts = text.split(/(@\w+)/g)
-  return <>{parts.map((p, i) => (p.startsWith('@') ? <span key={i} className="mention">{p}</span> : p))}</>
+  return <>{text.split(/(@\w+)/g).map((p, i) => (p.startsWith('@') ? <span key={i} className="mention">{p}</span> : p))}</>
 }
 
 function DrawerBody({ task }) {
   const user = useCurrentUser()
   const employees = useStore((s) => s.employees)
-  const projects = useStore((s) => s.projects)
+  const clients = useStore((s) => s.clients)
   const allComments = useStore((s) => s.comments)
   const allActivity = useStore((s) => s.activity)
   const updateTask = useStore((s) => s.updateTask)
+  const deleteTask = useStore((s) => s.deleteTask)
   const addComment = useStore((s) => s.addComment)
+  const showToast = useStore((s) => s.showToast)
 
   const editable = canEditTask(user, task, employees)
-  const reassignable = canReassign(user, task, employees)
-  const people = useMemo(() => assignableEmployees(user, employees), [user, employees])
-  const comments = useMemo(() => allComments.filter((c) => c.taskId === task.id), [allComments, task.id])
-  const history = useMemo(() => allActivity.filter((a) => a.taskId === task.id && a.type !== 'comment').slice(0, 12), [allActivity, task.id])
-  const project = projects.find((p) => p.id === task.projectId)
+  const comments = useMemo(() => allComments.filter((c) => c.taskId === task.id).sort((a, b) => a.at - b.at), [allComments, task.id])
+  const history = useMemo(() => allActivity.filter((a) => a.taskId === task.id && a.type !== 'comment').sort((a, b) => b.at - a.at).slice(0, 10), [allActivity, task.id])
   const name = (id) => employees.find((e) => e.id === id)?.name ?? 'Someone'
 
   const [title, setTitle] = useState(task.title)
-  const [desc, setDesc] = useState(task.description)
-  const [doneWhen, setDoneWhen] = useState(task.doneWhen)
-  const [blocking, setBlocking] = useState(false)
-  const [blockOn, setBlockOn] = useState('')
-  const [blockWhy, setBlockWhy] = useState('')
+  const [notes, setNotes] = useState(task.notes ?? '')
   const [link, setLink] = useState('')
   const [draft, setDraft] = useState('')
   const endRef = useRef(null)
@@ -54,62 +49,57 @@ function DrawerBody({ task }) {
   const addLink = () => {
     const v = link.trim()
     if (!v) return
-    updateTask(task.id, { links: [...task.links, /^https?:\/\//.test(v) ? v : `https://${v}`] })
+    updateTask(task.id, { links: [...(task.links ?? []), /^https?:\/\//.test(v) ? v : `https://${v}`] })
     setLink('')
   }
-  const others = employees.filter((e) => e.active && e.id !== user.id)
+  const reassign = (id) => {
+    updateTask(task.id, { assigneeId: id })
+    if (id !== user.id) showToast(`Given to ${name(id)}. They'll be notified.`)
+  }
 
   return (
     <>
       <div className="drawer-body">
         <div className="stack" style={{ gap: 14 }}>
           <textarea className="title-input" rows={2} value={title} disabled={!editable} aria-label="Task title"
-            onChange={(e) => setTitle(e.target.value)} onBlur={() => title.trim() ? save('title', title.trim()) : setTitle(task.title)} />
+            onChange={(e) => setTitle(e.target.value)} onBlur={() => (title.trim() ? save('title', title.trim()) : setTitle(task.title))} />
           <div className="status-pills" role="group" aria-label="Status">
             {STATUSES.map((s) => (
-              <button key={s.id} className={`status-pill ${task.status === s.id ? 'on' : ''}`} disabled={!editable}
+              <button key={s.id} className={`status-pill s-${s.id} ${task.status === s.id ? 'on' : ''}`} disabled={!editable}
                 onClick={() => updateTask(task.id, { status: s.id })}>{s.label}</button>
             ))}
           </div>
-          {task.blocked && <BlockedNote blocked={task.blocked} />}
         </div>
 
         <dl className="props">
-          <dt><UserCheck />Assigned to</dt>
-          <dd>{reassignable
-            ? <select className="select select-sm" value={task.assigneeId} onChange={(e) => updateTask(task.id, { assigneeId: e.target.value })}>
-                {!people.some((p) => p.id === task.assigneeId) && <option value={task.assigneeId}>{name(task.assigneeId)}</option>}
-                {people.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
+          <dt><UserCheck />Who does it</dt>
+          <dd>{editable
+            ? <select className="select select-sm" value={task.assigneeId} onChange={(e) => reassign(e.target.value)}><PeopleOptions employees={employees} meId={user.id} /></select>
             : <Person id={task.assigneeId} />}</dd>
-          <dt><User />Assigned by</dt>
+          <dt><User />Given by</dt>
           <dd><Person id={task.assignedById} /></dd>
           <dt><Building2 />Client</dt>
-          <dd className="row">{task.clientId ? <ClientTag clientId={task.clientId} /> : <span className="muted">Internal</span>}{project && <span className="chip truncate">{project.name}</span>}</dd>
-          <dt><Calendar />Due</dt>
-          <dd className="row">{editable
-            ? <input className="input select-sm" type="date" style={{ width: 160 }} value={task.due ?? ''} onChange={(e) => updateTask(task.id, { due: e.target.value || null })} />
-            : null}<Due date={task.due} done={task.status === 'done'} /></dd>
-          <dt><Flag />Priority</dt>
           <dd>{editable
-            ? <select className="select select-sm" value={task.priority} onChange={(e) => updateTask(task.id, { priority: e.target.value })}>
-                {PRIORITIES.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+            ? <select className="select select-sm" value={task.clientId ?? ''} onChange={(e) => updateTask(task.id, { clientId: e.target.value || null })}>
+                <option value="">Internal / no client</option>
+                {clients.filter((c) => c.active || c.id === task.clientId).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
-            : <PriorityBadge priority={task.priority} />}</dd>
+            : task.clientId ? <ClientTag clientId={task.clientId} /> : <span className="muted">Internal</span>}</dd>
+          <dt><Calendar />Due</dt>
+          <dd className="row">{editable && <input className="input select-sm" type="date" style={{ width: 160 }} value={task.due ?? ''} onChange={(e) => updateTask(task.id, { due: e.target.value || null })} />}<Due date={task.due} done={task.status === 'done'} /></dd>
+          <dt><Flame />Urgent</dt>
+          <dd><label className={`check ${task.urgent ? 'on urgent' : ''}`}><input type="checkbox" disabled={!editable} checked={!!task.urgent} onChange={(e) => updateTask(task.id, { urgent: e.target.checked })} />{task.urgent ? 'Yes' : 'No'}</label></dd>
         </dl>
 
         <div className="stack" style={{ gap: 8 }}>
-          <div className="section-title row"><Target size={13} />Done when</div>
-          <input className="input" value={doneWhen} disabled={!editable} placeholder="What does “finished” look like?"
-            onChange={(e) => setDoneWhen(e.target.value)} onBlur={() => save('doneWhen', doneWhen.trim())} />
-          <div className="section-title mt-8">Details</div>
-          <textarea className="textarea" value={desc} disabled={!editable} placeholder="Add a brief, references, notes…"
-            onChange={(e) => setDesc(e.target.value)} onBlur={() => save('description', desc.trim())} />
+          <div className="section-title">Notes</div>
+          <textarea className="textarea" value={notes} disabled={!editable} placeholder="Brief, references, what “done” looks like…"
+            onChange={(e) => setNotes(e.target.value)} onBlur={() => save('notes', notes.trim())} />
         </div>
 
         <div className="stack" style={{ gap: 8 }}>
           <div className="section-title row"><Link2 size={13} />Files & links</div>
-          {task.links.map((l, i) => (
+          {(task.links ?? []).map((l, i) => (
             <div className="row between" key={i}>
               <a className="chip truncate" href={l} target="_blank" rel="noreferrer" style={{ maxWidth: '100%' }}><Link2 size={13} />{l.replace(/^https?:\/\//, '')}</a>
               {editable && <button className="icon-btn" aria-label="Remove link" onClick={() => updateTask(task.id, { links: task.links.filter((_, j) => j !== i) })}><X /></button>}
@@ -123,46 +113,18 @@ function DrawerBody({ task }) {
           )}
         </div>
 
-        {editable && task.status !== 'done' && (
-          <div className="stack" style={{ gap: 8 }}>
-            {task.blocked ? (
-              <button className="btn btn-sm" style={{ alignSelf: 'flex-start' }} onClick={() => updateTask(task.id, { blocked: null })}><Check />Unblock — I have what I need</button>
-            ) : !blocking ? (
-              <button className="btn btn-sm btn-danger" style={{ alignSelf: 'flex-start' }} onClick={() => setBlocking(true)}><Ban />I'm blocked on this</button>
-            ) : (
-              <div className="card card-pad stack" style={{ boxShadow: 'none' }}>
-                <div className="strong">What are you waiting for?</div>
-                <div className="form-grid">
-                  <select className="select" value={blockOn} onChange={(e) => setBlockOn(e.target.value)} aria-label="Waiting on">
-                    <option value="">Waiting on…</option>
-                    {others.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                  </select>
-                  <input className="input" value={blockWhy} onChange={(e) => setBlockWhy(e.target.value)} placeholder="Reason (e.g. need final copy)" />
-                </div>
-                <div className="row">
-                  <button className="btn btn-primary btn-sm" disabled={!blockOn}
-                    onClick={() => { updateTask(task.id, { blocked: { onId: blockOn, reason: blockWhy.trim() } }); setBlocking(false); setBlockOn(''); setBlockWhy('') }}>Mark as blocked</button>
-                  <button className="btn btn-ghost btn-sm" onClick={() => setBlocking(false)}>Cancel</button>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
         <div className="stack">
           <div className="section-title">Comments · {comments.length}</div>
-          {comments.length === 0 && <div className="muted small">No comments yet. Use @Name to notify a teammate.</div>}
-          <AnimatePresence initial={false}>
-            {comments.map((c) => (
-              <motion.div key={c.id} className="comment" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
-                <Avatar id={c.authorId} size={28} />
-                <div className="grow">
-                  <div className="row small"><span className="strong">{name(c.authorId)}</span><span className="muted">{relTime(c.at)}</span></div>
-                  <div className="comment-bubble mt-4"><CommentText text={c.text} /></div>
-                </div>
-              </motion.div>
-            ))}
-          </AnimatePresence>
+          {comments.length === 0 && <div className="muted small">No comments yet. Type @Name to notify someone.</div>}
+          {comments.map((c) => (
+            <div key={c.id} className="comment">
+              <Avatar id={c.authorId} size={28} />
+              <div className="grow">
+                <div className="row small"><span className="strong">{name(c.authorId)}</span><span className="muted">{relTime(c.at)}</span></div>
+                <div className="comment-bubble mt-4"><CommentText text={c.text} /></div>
+              </div>
+            </div>
+          ))}
           <div ref={endRef} />
         </div>
 
@@ -175,6 +137,11 @@ function DrawerBody({ task }) {
               ))}
             </div>
           </div>
+        )}
+
+        {canDeleteTask(user, task) && (
+          <button className="btn btn-ghost btn-sm btn-danger" style={{ alignSelf: 'flex-start' }}
+            onClick={() => window.confirm('Delete this task? This cannot be undone.') && deleteTask(task.id)}><Trash2 />Delete task</button>
         )}
       </div>
 
