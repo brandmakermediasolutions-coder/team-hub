@@ -15,6 +15,16 @@ const db = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SE
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!))
 const niceDate = (d: string | null) =>
   d ? new Date(`${d}T12:00:00+05:30`).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' }) : 'No due date'
+// "Today" / "Tomorrow" / "Overdue" next to the due date, worked out in India time
+const dueHint = (d: string | null) => {
+  if (!d) return null
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })
+  const days = Math.round((Date.parse(`${d}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86400000)
+  if (days < 0) return { text: 'Overdue', color: '#d2362f' }
+  if (days === 0) return { text: 'Today', color: '#b86e00' }
+  if (days === 1) return { text: 'Tomorrow', color: '#b86e00' }
+  return null
+}
 
 Deno.serve(async (req) => {
   const secret = Deno.env.get('WEBHOOK_SECRET')
@@ -49,20 +59,58 @@ Deno.serve(async (req) => {
   const subject = autoNew
     ? `New repeating task: ${t.title}`
     : `${t.urgent ? '🔥 Urgent: ' : ''}${giver.split(' ')[0]} gave you a task: ${t.title}`
-  const html = `
-  <div style="font-family:Inter,Segoe UI,Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#16181d">
-    <div style="font-size:13px;color:#8a8f99;margin-bottom:6px">Team Hub · Brandmaker333</div>
-    <h2 style="margin:0 0 16px;font-size:20px">${esc(t.title)}</h2>
-    <table style="font-size:14px;border-collapse:collapse;margin-bottom:18px">
-      <tr><td style="color:#8a8f99;padding:4px 16px 4px 0">From</td><td>${autoNew ? `Team Hub (repeating task, on behalf of ${esc(giver)})` : esc(giver)}</td></tr>
-      <tr><td style="color:#8a8f99;padding:4px 16px 4px 0">Client</td><td>${esc(clientName)}</td></tr>
-      <tr><td style="color:#8a8f99;padding:4px 16px 4px 0">Due</td><td>${niceDate(t.due)}</td></tr>
-      ${t.urgent ? '<tr><td style="color:#8a8f99;padding:4px 16px 4px 0">Priority</td><td style="color:#d2362f;font-weight:600">Urgent</td></tr>' : ''}
+  const firstName = (to.name ?? '').split(' ')[0] || 'there'
+  const giverFirst = giver.split(' ')[0]
+  const font = "font-family:Inter,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+  const badge = t.urgent
+    ? { text: 'URGENT TASK', color: '#d2362f', bg: '#fde9e7' }
+    : autoNew ? { text: 'REPEATING TASK', color: '#6d4fe0', bg: '#eeeafc' } : { text: 'NEW TASK', color: '#f04e23', bg: '#fdeee9' }
+  const intro = autoNew
+    ? `Hi ${esc(firstName)}, this one comes back on a schedule. It is on your list now.`
+    : `Hi ${esc(firstName)}, <b style="color:#16181d">${esc(giverFirst)}</b> gave you a task in Team Hub.`
+  const hint = dueHint(t.due)
+  const row = (label: string, value: string, last = false) => `
+          <tr>
+            <td style="${font};font-size:13px;color:#8a8f99;padding:11px 16px;width:84px;${last ? '' : 'border-bottom:1px solid #ececea;'}">${label}</td>
+            <td style="${font};font-size:14px;color:#16181d;font-weight:600;padding:11px 16px 11px 0;${last ? '' : 'border-bottom:1px solid #ececea;'}">${value}</td>
+          </tr>`
+  const html = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><title>${esc(subject)}</title></head>
+<body style="margin:0;padding:0;background:#f3f3ef">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0">${esc(clientName)} · ${niceDate(t.due)}${t.urgent ? ' · Urgent' : ''}</div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f3f3ef" style="background:#f3f3ef"><tr><td align="center" style="padding:32px 12px">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:540px">
+      <tr><td style="padding:0 4px 16px">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+          <td bgcolor="#f04e23" style="background:#f04e23;border-radius:9px;width:34px;height:34px;text-align:center;${font};font-size:13px;font-weight:800;color:#ffffff">BM</td>
+          <td style="padding-left:10px;${font};font-size:15px;font-weight:700;color:#16181d">Team Hub <span style="font-weight:400;color:#8a8f99">· Brandmaker333</span></td>
+        </tr></table>
+      </td></tr>
+      <tr><td bgcolor="#ffffff" style="background:#ffffff;border:1px solid #e6e6e1;border-radius:16px;padding:28px 28px 26px">
+        <span style="display:inline-block;${font};font-size:11px;font-weight:700;letter-spacing:.08em;color:${badge.color};background:${badge.bg};border-radius:99px;padding:5px 10px">${badge.text}</span>
+        <h1 style="${font};font-size:22px;line-height:1.3;font-weight:700;color:#16181d;margin:14px 0 8px">${esc(t.title)}</h1>
+        <p style="${font};font-size:14px;line-height:1.55;color:#4a4f5a;margin:0 0 20px">${intro}</p>
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#fafaf8" style="background:#fafaf8;border:1px solid #ececea;border-radius:12px;border-collapse:separate">
+          ${row('Client', esc(clientName))}
+          ${row('Due', `${niceDate(t.due)}${hint ? ` <span style="font-weight:600;color:${hint.color}">· ${hint.text}</span>` : ''}`, autoNew)}
+          ${autoNew ? '' : row('From', esc(giver), true)}
+        </table>
+        ${t.notes ? `
+        <div style="${font};font-size:11px;font-weight:700;letter-spacing:.08em;color:#8a8f99;margin:20px 0 6px">NOTES</div>
+        <div style="${font};font-size:14px;line-height:1.55;color:#16181d;border-left:3px solid #f04e23;padding:2px 0 2px 12px;white-space:pre-wrap">${esc(t.notes)}</div>` : ''}
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:24px"><tr>
+          <td bgcolor="#f04e23" style="background:#f04e23;border-radius:10px">
+            <a href="${link}" style="display:inline-block;${font};font-size:15px;font-weight:600;color:#ffffff;text-decoration:none;padding:12px 22px">Open the task &rarr;</a>
+          </td>
+        </tr></table>
+      </td></tr>
+      <tr><td style="padding:16px 6px 0;${font};font-size:12px;line-height:1.6;color:#8a8f99">
+        ${autoNew ? 'This task repeats on a schedule set in Team Hub (Admin &rarr; Repeating).' : 'You got this email because a task was given to you in Team Hub.'}<br>
+        Brandmaker333 · internal tool
+      </td></tr>
     </table>
-    ${t.notes ? `<div style="background:#f5f5f2;border-radius:10px;padding:12px 14px;font-size:14px;margin-bottom:18px;white-space:pre-wrap">${esc(t.notes)}</div>` : ''}
-    <a href="${link}" style="display:inline-block;background:#f04e23;color:#fff;text-decoration:none;font-weight:600;padding:11px 18px;border-radius:10px">Open the task</a>
-    <div style="font-size:12px;color:#8a8f99;margin-top:22px">${autoNew ? 'This task comes back on a schedule (Admin → Repeating in Team Hub).' : 'You got this because a task was given to you in Team Hub.'}</div>
-  </div>`
+  </td></tr></table>
+</body></html>`
 
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
