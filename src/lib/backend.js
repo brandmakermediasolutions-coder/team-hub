@@ -105,3 +105,47 @@ export async function searchUpdates(term) {
   if (error) throw error
   return data.map(fromDb)
 }
+
+// ---------- admin: monthly scorecard ----------
+// Daily updates between two ISO dates (inclusive), from the full history.
+export const fetchUpdatesBetween = (fromIso, toIso) =>
+  fetchAll('updates', (q) => q.gte('date', fromIso).lte('date', toIso).order('id'))
+
+// "Sent back" entries in the activity log between two timestamps (the app only loads the latest 500).
+export const fetchSendBacksBetween = (fromTs, toTs) =>
+  fetchAll('activity', (q) => q.eq('type', 'status').like('text', 'sent "%').gte('at', fromTs).lt('at', toTs).order('id'))
+
+// ---------- admin: backup ----------
+// Every row of one table, exactly as stored (database column names), paged in a stable order.
+async function fetchRaw(table) {
+  const out = []
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabase.from(table).select('*').order('id').range(from, from + 999)
+    if (error) throw error
+    out.push(...data)
+    if (data.length < 1000) return out
+  }
+}
+
+const OPTIONAL_TABLES = ['repeat_rules', 'task_templates', 'repeat_runs']
+
+// Complete copy of every table. onStep(index, total, table) is called before each table.
+// Returns { tables: { [dbTable]: rows }, notes: [] }
+export async function fetchBackup(onStep = () => {}) {
+  const tables = {}
+  const notes = []
+  for (let i = 0; i < TABLES.length; i += 1) {
+    const table = TABLES[i]
+    onStep(i, TABLES.length, table)
+    try {
+      tables[table] = await fetchRaw(table)
+    } catch (e) {
+      // newer tables may not exist yet on an older database; anything else is a real failure
+      const missing = OPTIONAL_TABLES.includes(table) && /does not exist|could not find|PGRST205|42P01/i.test(`${e?.code ?? ''} ${e?.message ?? ''}`)
+      if (!missing) throw new Error(`Could not read "${table}": ${e?.message ?? e}`)
+      tables[table] = []
+      notes.push(`${table}: table not set up yet`)
+    }
+  }
+  return { tables, notes }
+}

@@ -12,6 +12,7 @@ import PostCalendar from './pages/PostCalendar'
 import Team from './pages/Team'
 import SearchPage from './pages/Search'
 import Admin from './pages/Admin'
+import Scorecard from './pages/Scorecard'
 
 export default function App() {
   const user = useCurrentUser()
@@ -38,6 +39,7 @@ export default function App() {
             <Route path="calendar" element={canSeePostCalendar(user) ? <PostCalendar /> : <Navigate to="/" replace />} />
             <Route path="search" element={<SearchPage />} />
             <Route path="team" element={isLead(user) ? <Team /> : <Navigate to="/" replace />} />
+            <Route path="scorecard" element={isAdmin(user) ? <Scorecard /> : <Navigate to="/" replace />} />
             <Route path="admin" element={isAdmin(user) ? <Admin /> : <Navigate to="/" replace />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>

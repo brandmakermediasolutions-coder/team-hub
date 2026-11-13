@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Sun as SunIcon, ListChecks, Building2, CalendarDays, Users, Shield, LogOut, Moon, Plus, Search, Bell, CircleCheck, CircleAlert, FlaskConical } from 'lucide-react'
+import { Sun as SunIcon, ListChecks, Building2, CalendarDays, Users, Shield, LogOut, Moon, Plus, Search, Bell, CircleCheck, CircleAlert, FlaskConical, Gauge } from 'lucide-react'
 import { useStore, useCurrentUser } from '../store/useStore'
 import { ROLE_LABEL, isAdmin, isLead, canSeePostCalendar } from '../lib/permissions'
 import { isCloud } from '../lib/backend'
@@ -184,7 +184,7 @@ export default function Shell() {
     { to: '/clients', label: 'Clients', icon: Building2 },
     ...(canSeePostCalendar(user) ? [{ to: '/calendar', label: 'Post Calendar', icon: CalendarDays }] : []),
     ...(isLead(user) ? [{ to: '/team', label: 'Team', icon: Users }] : []),
-    ...(isAdmin(user) ? [{ to: '/admin', label: 'Admin', icon: Shield }] : []),
+    ...(isAdmin(user) ? [{ to: '/scorecard', label: 'Scorecard', icon: Gauge }, { to: '/admin', label: 'Admin', icon: Shield }] : []),
   ]
 
   return (

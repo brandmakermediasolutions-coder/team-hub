@@ -605,6 +605,23 @@ button.user-card:hover { background: var(--side-active); }
 .away-task-title { display: flex; flex-direction: column; text-align: left; min-width: 0; }
 .away-task .task-meta { margin-top: 1px; }
 
+/* ============ Scorecard + backup (admin) ============ */
+.sc-table td { white-space: nowrap; }
+.sc-table td:first-child { white-space: normal; min-width: 170px; }
+.sc-table .expand-row > td { white-space: normal; }
+.sc-sort { display: inline-flex; align-items: center; gap: 4px; font: inherit; color: inherit; letter-spacing: inherit; text-transform: inherit; }
+.sc-sort:hover, .sc-sort.on { color: var(--ink); }
+.sc-sort svg { width: 12px; height: 12px; }
+.sc-group > td { background: var(--surface-2); font-size: 11.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-3); padding-top: 8px !important; padding-bottom: 8px !important; }
+.table tbody tr.sc-group:hover { background: var(--surface-2); }
+.sc-sticky { position: sticky; left: 16px; display: inline-block; }
+.sc-expand { display: block; }
+.sc-pct { display: flex; flex-direction: column; gap: 5px; min-width: 64px; font-variant-numeric: tabular-nums; }
+.sc-bar { width: 72px; height: 5px; }
+.tab .notif-dot { top: 9px; right: 4px; width: 7px; height: 7px; background: var(--amber); }
+.backup-progress { height: 6px; }
+.backup-progress span { background: var(--accent); }
+
 /* ============ Responsive ============ */
 .mobile-only { display: none; }
 @media (max-width: 1100px) {
@@ -631,6 +648,9 @@ button.user-card:hover { background: var(--side-active); }
   .away-task { flex-wrap: wrap; padding-left: 8px; }
   .away-task .select { margin-left: auto; }
   .away-none { padding-left: 8px; }
+  .sc-table thead th:first-child, .sc-table tr.click-row > td:first-child { position: sticky; left: 0; z-index: 1; background: var(--surface); min-width: 150px; box-shadow: 1px 0 0 var(--line); }
+  .sc-table tr.click-row:hover > td:first-child { background: var(--surface-2); }
+  .sc-expand { width: calc(100vw - 80px); white-space: normal; }
   .rule-row { flex-wrap: wrap; padding-left: 16px; }
   .rule-actions { margin-left: auto; }
   .load-row { grid-template-columns: 120px minmax(0, 1fr) 54px; }

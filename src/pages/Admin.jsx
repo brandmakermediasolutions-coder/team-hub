@@ -12,6 +12,7 @@ import ClientForm from '../components/ClientForm'
 import RuleForm from '../components/RuleForm'
 import TemplateForm from '../components/TemplateForm'
 import AwayForm from '../components/AwayForm'
+import BackupCard, { backupDue } from '../components/Backup'
 
 const RANK = { admin: 0, head: 1, member: 2 }
 const ROLE_TONE = { admin: 'tone-accent', head: 'tone-violet', member: 'tone-grey' }
@@ -108,6 +109,7 @@ export default function Admin() {
   const [tplModal, setTplModal] = useState(null) // { template } | null
   const [leaveFor, setLeaveFor] = useState(null)
   const [showLeft, setShowLeft] = useState(false)
+  const [backupStale, setBackupStale] = useState(backupDue)
   const madeBy = useMemo(() => {
     const m = {}
     tasks.forEach((t) => { if (t.repeatRuleId && t.status !== 'done') m[t.repeatRuleId] = (m[t.repeatRuleId] || 0) + 1 })
@@ -132,7 +134,7 @@ export default function Admin() {
         <button className={`tab ${tab === 'clients' ? 'active' : ''}`} onClick={() => setTab('clients')}><Building2 />Clients</button>
         <button className={`tab ${tab === 'repeating' ? 'active' : ''}`} onClick={() => setTab('repeating')}><Repeat />Repeating</button>
         <button className={`tab ${tab === 'templates' ? 'active' : ''}`} onClick={() => setTab('templates')}><LayoutList />Templates</button>
-        <button className={`tab ${tab === 'setup' ? 'active' : ''}`} onClick={() => setTab('setup')}><Settings />Setup</button>
+        <button className={`tab ${tab === 'setup' ? 'active' : ''}`} onClick={() => setTab('setup')} title={backupStale ? 'Time for a backup' : undefined}><Settings />Setup{backupStale && <span className="notif-dot" />}</button>
       </div>
 
       {tab === 'people' && (
@@ -246,6 +248,7 @@ export default function Admin() {
 
       {tab === 'setup' && (
         <div className="grid grid-2">
+          <BackupCard onDone={() => setBackupStale(false)} />
           <div className="card card-pad stack">
             <h2 className="row"><Database size={16} />Shared database</h2>
             {isCloud
