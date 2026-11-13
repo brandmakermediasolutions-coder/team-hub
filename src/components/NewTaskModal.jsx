@@ -4,7 +4,8 @@ import { useStore, useCurrentUser } from '../store/useStore'
 import { DEPARTMENTS } from '../store/seed'
 import { isCloud } from '../lib/backend'
 import { addDays, todayIso } from '../lib/date'
-import { Modal, Field } from './ui'
+import { awayLabel, isAway } from '../lib/repeat'
+import { Modal, Field, LeaveWarning } from './ui'
 
 const blank = (userId, d = {}) => ({
   title: '', clientId: d.clientId ?? '', assigneeId: d.assigneeId ?? userId, due: d.due ?? addDays(1), urgent: false, notes: '',
@@ -19,7 +20,7 @@ export function PeopleOptions({ employees, meId }) {
     if (!people.length) return null
     return (
       <optgroup key={dep} label={dep}>
-        {people.map((p) => <option key={p.id} value={p.id}>{p.name}{p.id === meId ? ' (me)' : ''}</option>)}
+        {people.map((p) => <option key={p.id} value={p.id}>{p.name}{p.id === meId ? ' (me)' : ''}{isAway(p) ? ` · ${awayLabel(p).replace(/^Away/, 'away')}` : ''}</option>)}
       </optgroup>
     )
   })
@@ -91,6 +92,7 @@ export default function NewTaskModal() {
             <input className="input" type="date" style={{ width: 160, height: 32 }} value={f.due ?? ''} onChange={set('due')} aria-label="Pick a date" />
           </div>
         </Field>
+        <LeaveWarning personId={f.assigneeId} due={f.due} />
         <div className="row row-wrap between">
           <label className={`check ${f.urgent ? 'on urgent' : ''}`}>
             <input type="checkbox" checked={f.urgent} onChange={set('urgent')} /><Flame size={13} />Urgent

@@ -1,12 +1,17 @@
 import { useMemo, useState } from 'react'
-import { Users, Building2, Settings, UserPlus, Plus, Pencil, Database, Mail, RotateCcw, CircleCheck, CircleAlert } from 'lucide-react'
+import { Users, Building2, Settings, UserPlus, Plus, Pencil, Database, Mail, RotateCcw, CircleCheck, CircleAlert, Repeat, LayoutList, Pause, Play, Trash2, Plane } from 'lucide-react'
 import { useStore, useCurrentUser } from '../store/useStore'
 import { DEPARTMENTS, emailFor } from '../store/seed'
 import { ROLE_LABEL } from '../lib/permissions'
 import { isCloud } from '../lib/backend'
-import { Avatar, AvatarStack, Field, Modal, PageMotion } from '../components/ui'
+import { todayIso } from '../lib/date'
+import { hasLeave, leaveText, ruleSummary, shortService } from '../lib/repeat'
+import { Avatar, AvatarStack, AwayTag, Empty, Field, Modal, PageMotion } from '../components/ui'
 import { PeopleOptions } from '../components/NewTaskModal'
 import ClientForm from '../components/ClientForm'
+import RuleForm from '../components/RuleForm'
+import TemplateForm from '../components/TemplateForm'
+import AwayForm from '../components/AwayForm'
 
 const RANK = { admin: 0, head: 1, member: 2 }
 const ROLE_TONE = { admin: 'tone-accent', head: 'tone-violet', member: 'tone-grey' }
@@ -89,11 +94,25 @@ export default function Admin() {
   const employees = useStore((s) => s.employees)
   const clients = useStore((s) => s.clients)
   const tasks = useStore((s) => s.tasks)
+  const rules = useStore((s) => s.rules)
+  const templates = useStore((s) => s.templates)
+  const saveRule = useStore((s) => s.saveRule)
+  const deleteRule = useStore((s) => s.deleteRule)
+  const deleteTemplate = useStore((s) => s.deleteTemplate)
+  const showToast = useStore((s) => s.showToast)
   const resetDemo = useStore((s) => s.resetDemo)
   const [tab, setTab] = useState('people')
   const [personModal, setPersonModal] = useState(null) // { person } | null
   const [clientModal, setClientModal] = useState(null)
+  const [ruleModal, setRuleModal] = useState(null) // { rule } | null
+  const [tplModal, setTplModal] = useState(null) // { template } | null
+  const [leaveFor, setLeaveFor] = useState(null)
   const [showLeft, setShowLeft] = useState(false)
+  const madeBy = useMemo(() => {
+    const m = {}
+    tasks.forEach((t) => { if (t.repeatRuleId && t.status !== 'done') m[t.repeatRuleId] = (m[t.repeatRuleId] || 0) + 1 })
+    return m
+  }, [tasks])
 
   const byId = useMemo(() => Object.fromEntries(employees.map((e) => [e.id, e])), [employees])
   const openBy = useMemo(() => {
@@ -111,6 +130,8 @@ export default function Admin() {
       <div className="tabs">
         <button className={`tab ${tab === 'people' ? 'active' : ''}`} onClick={() => setTab('people')}><Users />People</button>
         <button className={`tab ${tab === 'clients' ? 'active' : ''}`} onClick={() => setTab('clients')}><Building2 />Clients</button>
+        <button className={`tab ${tab === 'repeating' ? 'active' : ''}`} onClick={() => setTab('repeating')}><Repeat />Repeating</button>
+        <button className={`tab ${tab === 'templates' ? 'active' : ''}`} onClick={() => setTab('templates')}><LayoutList />Templates</button>
         <button className={`tab ${tab === 'setup' ? 'active' : ''}`} onClick={() => setTab('setup')}><Settings />Setup</button>
       </div>
 
@@ -126,13 +147,16 @@ export default function Admin() {
               <tbody>
                 {people.map((e) => (
                   <tr key={e.id} className="click-row" onClick={() => setPersonModal({ person: e })}>
-                    <td><div className="row" style={{ gap: 10 }}><Avatar id={e.id} size={30} /><div><b>{e.name}</b><div className="tiny muted">{e.title}</div></div></div></td>
+                    <td><div className="row" style={{ gap: 10 }}><Avatar id={e.id} size={30} /><div><div className="row" style={{ gap: 6 }}><b>{e.name}</b><AwayTag id={e.id} /></div><div className="tiny muted">{e.title}</div></div></div></td>
                     <td className="small">{e.email || <span className="muted">Not set</span>}</td>
                     <td>{e.department}</td>
                     <td>{byId[e.headId]?.name ?? <span className="muted">—</span>}</td>
                     <td><span className={`badge ${ROLE_TONE[e.role]}`}>{ROLE_LABEL[e.role]}</span></td>
                     <td>{openBy[e.id] || 0}</td>
-                    <td style={{ textAlign: 'right' }}><button className="btn btn-ghost btn-sm"><Pencil />Edit</button></td>
+                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      {e.active && <button className="btn btn-ghost btn-sm" title="On leave" onClick={(ev) => { ev.stopPropagation(); setLeaveFor(e.id) }}><Plane />{hasLeave(e) && e.awayTo >= todayIso() ? leaveText(e) : 'Leave'}</button>}
+                      <button className="btn btn-ghost btn-sm"><Pencil />Edit</button>
+                    </td>
                   </tr>
                 ))}
                 {people.length === 0 && <tr><td colSpan={7} className="muted">Nobody here.</td></tr>}
@@ -168,6 +192,58 @@ export default function Admin() {
         </div>
       )}
 
+      {tab === 'repeating' && (
+        <div className="stack">
+          <div className="row between row-wrap">
+            <div className="small muted">Tasks made automatically. Only this period's tasks are made; nothing is backfilled.</div>
+            <button className="btn btn-primary btn-sm" onClick={() => setRuleModal({ rule: null })}><Plus />Add repeating task</button>
+          </div>
+          <div className="card">
+            {rules.length === 0 && <Empty icon={Repeat} title="No repeating tasks yet" text="Add one for reports and other work that comes back every week or month." />}
+            {[...rules].sort((a, b) => Number(b.active) - Number(a.active) || (a.createdAt ?? 0) - (b.createdAt ?? 0)).map((r) => (
+              <div key={r.id} className={`rule-row ${r.active ? '' : 'is-paused'}`}>
+                <button className="grow rule-main" onClick={() => setRuleModal({ rule: r })}>
+                  <div className="row row-wrap" style={{ gap: 8 }}><b>{r.title}</b>{!r.active && <span className="badge tone-grey">Paused</span>}</div>
+                  <div className="small soft mt-4">{ruleSummary(r, clients, employees)}</div>
+                  {madeBy[r.id] > 0 && <div className="tiny muted mt-4">{madeBy[r.id]} open right now</div>}
+                </button>
+                <div className="row rule-actions" style={{ gap: 2 }}>
+                  <button className="btn btn-ghost btn-sm" onClick={() => { saveRule({ ...r, active: !r.active }); showToast(r.active ? 'Paused. No new tasks will be made.' : 'Resumed') }}>{r.active ? <><Pause />Pause</> : <><Play />Resume</>}</button>
+                  <button className="btn btn-ghost btn-sm" onClick={() => setRuleModal({ rule: r })}><Pencil />Edit</button>
+                  <button className="icon-btn" aria-label="Delete" onClick={() => window.confirm(`Delete “${r.title}”? Tasks it already made stay.`) && deleteRule(r.id)}><Trash2 /></button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {tab === 'templates' && (
+        <div className="stack">
+          <div className="row between row-wrap">
+            <div className="small muted">Ready-made task lists. Use them from a client's page with “Use a template”.</div>
+            <button className="btn btn-primary btn-sm" onClick={() => setTplModal({ template: null })}><Plus />Add template</button>
+          </div>
+          {templates.length === 0 && <div className="card"><Empty icon={LayoutList} title="No templates yet" /></div>}
+          <div className="grid grid-auto">
+            {[...templates].sort((a, b) => a.name.localeCompare(b.name)).map((t) => (
+              <div key={t.id} className="card card-pad stack" style={{ gap: 10 }}>
+                <div className="row between"><h2 className="truncate">{t.name}</h2><span className="badge">{(t.items ?? []).length} tasks</span></div>
+                <ol className="tpl-preview">
+                  {(t.items ?? []).map((it, i) => (
+                    <li key={i}><span className="truncate">{it.title}</span><span className="tiny muted">{it.assign === 'owner' ? 'Account manager' : it.assign === 'service' ? `${shortService(it.service)} person` : byId[it.personId]?.name.split(' ')[0] ?? '—'} · {Number(it.days) ? `${it.days}d` : 'same day'}</span></li>
+                  ))}
+                </ol>
+                <div className="row" style={{ marginTop: 'auto' }}>
+                  <button className="btn btn-sm" onClick={() => setTplModal({ template: t })}><Pencil />Edit</button>
+                  <button className="btn btn-ghost btn-sm btn-danger" onClick={() => window.confirm(`Delete the template “${t.name}”?`) && deleteTemplate(t.id)}><Trash2 />Delete</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {tab === 'setup' && (
         <div className="grid grid-2">
           <div className="card card-pad stack">
@@ -192,6 +268,9 @@ export default function Admin() {
 
       <PersonForm open={!!personModal} person={personModal?.person ?? null} onClose={() => setPersonModal(null)} />
       <ClientForm open={!!clientModal} client={clientModal?.client ?? null} onClose={() => setClientModal(null)} />
+      <RuleForm open={!!ruleModal} rule={ruleModal?.rule ?? null} onClose={() => setRuleModal(null)} />
+      <TemplateForm open={!!tplModal} template={tplModal?.template ?? null} onClose={() => setTplModal(null)} />
+      <AwayForm personId={leaveFor} onClose={() => setLeaveFor(null)} />
     </PageMotion>
   )
 }

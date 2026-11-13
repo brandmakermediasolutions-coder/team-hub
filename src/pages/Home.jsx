@@ -1,11 +1,14 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AnimatePresence } from 'framer-motion'
-import { PartyPopper, Plus, PenLine, Send, Check, CircleCheck, Hourglass, Users, ArrowRight } from 'lucide-react'
+import { PartyPopper, Plus, PenLine, Send, Check, CircleCheck, Hourglass, Users, ArrowRight, Plane } from 'lucide-react'
 import { useStore, useCurrentUser } from '../store/useStore'
 import { isLead, teamIds } from '../lib/permissions'
 import { daysUntil, greeting, shortDate, todayIso } from '../lib/date'
-import { Avatar, Due, Empty, PageMotion, StatusBadge, TaskRow } from '../components/ui'
+import { hasLeave, isAway, leaveText } from '../lib/repeat'
+import { Avatar, AwayTag, Due, Empty, PageMotion, StatusBadge, TaskRow } from '../components/ui'
+import { ToReviewCard } from '../components/Review'
+import AwayForm from '../components/AwayForm'
 
 const GROUPS = [
   { id: 'overdue', label: 'Overdue', test: (n) => n !== null && n < 0 },
@@ -65,11 +68,13 @@ export default function Home() {
   const openNewTask = useStore((s) => s.openNewTask)
   const [view, setView] = useState('open')
   const [quick, setQuick] = useState('')
+  const [awayOpen, setAwayOpen] = useState(false)
+  const leaveAhead = hasLeave(user) && user.awayTo >= todayIso()
 
   const d = useMemo(() => {
     const mine = tasks.filter((t) => t.assigneeId === user.id)
     const byDue = (a, b) => (a.due ?? '9').localeCompare(b.due ?? '9') || Number(b.urgent) - Number(a.urgent)
-    const open = mine.filter((t) => t.status === 'todo' || t.status === 'doing').sort(byDue)
+    const open = mine.filter((t) => t.status === 'todo' || t.status === 'doing' || t.status === 'review').sort(byDue)
     const waiting = mine.filter((t) => t.status === 'waiting').sort(byDue)
     const done = mine.filter((t) => t.status === 'done').sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0)).slice(0, 30)
     const gave = tasks.filter((t) => t.assignedById === user.id && t.assigneeId !== user.id && t.status !== 'done').sort(byDue)
@@ -102,6 +107,9 @@ export default function Home() {
           <h1>{greeting()}, {user.name.split(' ')[0]}</h1>
           <p className="page-sub">{new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })} · {summary}</p>
         </div>
+        <button className="btn btn-ghost btn-sm" onClick={() => setAwayOpen(true)}>
+          <Plane />{leaveAhead ? (isAway(user) ? `On leave till ${shortDate(user.awayTo)}` : `Leave ${leaveText(user)}`) : 'Going on leave?'}
+        </button>
       </div>
 
       <div className="home-cols">
@@ -136,6 +144,8 @@ export default function Home() {
         </div>
 
         <div className="stack" style={{ gap: 16 }}>
+          <ToReviewCard />
+
           <div className="card">
             <div className="card-head">
               <h2 className="row"><PenLine size={16} />Today's update</h2>
@@ -160,6 +170,7 @@ export default function Home() {
           )}
         </div>
       </div>
+      <AwayForm personId={awayOpen ? user.id : null} onClose={() => setAwayOpen(false)} />
     </PageMotion>
   )
 }
@@ -172,7 +183,7 @@ function GaveRow({ task }) {
       <Avatar id={task.assigneeId} size={28} />
       <div className="grow">
         <div className="strong truncate">{task.title}</div>
-        <div className="task-meta"><span>{e?.name}</span><span className="sep" /><StatusBadge status={task.status} /></div>
+        <div className="task-meta"><span>{e?.name}</span><AwayTag id={task.assigneeId} /><span className="sep" /><StatusBadge status={task.status} /></div>
       </div>
       <Due date={task.due} />
     </button>

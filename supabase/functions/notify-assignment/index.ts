@@ -31,8 +31,10 @@ Deno.serve(async (req) => {
   const { data: people } = await db.from('employees').select('id, name, email, active').in('id', ids)
   const to = people?.find((p) => p.id === t.assignee_id)
   const from = people?.find((p) => p.id === t.assigned_by_id)
+  // repeating tasks are made automatically by Team Hub (nobody "gave" them), so they always get an email
+  const repeating = Boolean(t.repeat_rule_id)
   // UPDATE: whoever reassigned it is not stored on the task, so skip only clear self-assignments
-  if (!to?.email || !to.active || (type === 'INSERT' && t.assignee_id === t.assigned_by_id)) return new Response('no email needed')
+  if (!to?.email || !to.active || (type === 'INSERT' && !repeating && t.assignee_id === t.assigned_by_id)) return new Response('no email needed')
 
   let clientName = 'Internal'
   if (t.client_id) {
@@ -43,20 +45,23 @@ Deno.serve(async (req) => {
   const appUrl = (Deno.env.get('APP_URL') ?? '').replace(/\/$/, '')
   const link = `${appUrl}/?task=${encodeURIComponent(t.id)}`
   const giver = from?.name ?? 'A teammate'
-  const subject = `${t.urgent ? '🔥 Urgent: ' : ''}${giver.split(' ')[0]} gave you a task: ${t.title}`
+  const autoNew = repeating && type === 'INSERT'
+  const subject = autoNew
+    ? `New repeating task: ${t.title}`
+    : `${t.urgent ? '🔥 Urgent: ' : ''}${giver.split(' ')[0]} gave you a task: ${t.title}`
   const html = `
   <div style="font-family:Inter,Segoe UI,Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#16181d">
     <div style="font-size:13px;color:#8a8f99;margin-bottom:6px">Team Hub · Brandmaker333</div>
     <h2 style="margin:0 0 16px;font-size:20px">${esc(t.title)}</h2>
     <table style="font-size:14px;border-collapse:collapse;margin-bottom:18px">
-      <tr><td style="color:#8a8f99;padding:4px 16px 4px 0">From</td><td>${esc(giver)}</td></tr>
+      <tr><td style="color:#8a8f99;padding:4px 16px 4px 0">From</td><td>${autoNew ? `Team Hub (repeating task, on behalf of ${esc(giver)})` : esc(giver)}</td></tr>
       <tr><td style="color:#8a8f99;padding:4px 16px 4px 0">Client</td><td>${esc(clientName)}</td></tr>
       <tr><td style="color:#8a8f99;padding:4px 16px 4px 0">Due</td><td>${niceDate(t.due)}</td></tr>
       ${t.urgent ? '<tr><td style="color:#8a8f99;padding:4px 16px 4px 0">Priority</td><td style="color:#d2362f;font-weight:600">Urgent</td></tr>' : ''}
     </table>
     ${t.notes ? `<div style="background:#f5f5f2;border-radius:10px;padding:12px 14px;font-size:14px;margin-bottom:18px;white-space:pre-wrap">${esc(t.notes)}</div>` : ''}
     <a href="${link}" style="display:inline-block;background:#f04e23;color:#fff;text-decoration:none;font-weight:600;padding:11px 18px;border-radius:10px">Open the task</a>
-    <div style="font-size:12px;color:#8a8f99;margin-top:22px">You got this because a task was given to you in Team Hub.</div>
+    <div style="font-size:12px;color:#8a8f99;margin-top:22px">${autoNew ? 'This task comes back on a schedule (Admin → Repeating in Team Hub).' : 'You got this because a task was given to you in Team Hub.'}</div>
   </div>`
 
   const res = await fetch('https://api.resend.com/emails', {

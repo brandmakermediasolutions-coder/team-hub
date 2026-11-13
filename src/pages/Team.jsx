@@ -1,11 +1,75 @@
 import { Fragment, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ChevronLeft, ChevronRight, ChevronDown, PenLine, TriangleAlert, Hourglass, CircleCheck, Users } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ChevronDown, PenLine, TriangleAlert, Hourglass, CircleCheck, Users, Plane } from 'lucide-react'
 import { useStore, useCurrentUser } from '../store/useStore'
 import { DEPARTMENTS } from '../store/seed'
-import { teamIds } from '../lib/permissions'
+import { canEditTask, teamIds } from '../lib/permissions'
 import { addDays, daysUntil, formatDate, todayIso } from '../lib/date'
-import { Avatar, ClientTag, Empty, PageMotion, TaskRow } from '../components/ui'
+import { hasLeave, isAway, leaveText } from '../lib/repeat'
+import { Avatar, AwayTag, ClientTag, Due, Empty, PageMotion, TaskRow } from '../components/ui'
+import { PeopleOptions } from '../components/NewTaskModal'
+import AwayForm from '../components/AwayForm'
+
+// people on leave now (or within the next week), with their open work due before they're back
+function AwaySection({ people }) {
+  const user = useCurrentUser()
+  const tasks = useStore((s) => s.tasks)
+  const employees = useStore((s) => s.employees)
+  const updateTask = useStore((s) => s.updateTask)
+  const openTask = useStore((s) => s.openTask)
+  const showToast = useStore((s) => s.showToast)
+  const [editing, setEditing] = useState(null)
+  const rows = useMemo(() => {
+    const today = todayIso()
+    const soon = addDays(7)
+    return people.filter((e) => hasLeave(e) && e.awayTo >= today && e.awayFrom <= soon).map((e) => ({
+      e,
+      list: tasks.filter((t) => t.assigneeId === e.id && t.status !== 'done' && t.due && t.due <= e.awayTo && (isAway(e) || t.due >= e.awayFrom))
+        .sort((a, b) => a.due.localeCompare(b.due)),
+    }))
+  }, [people, tasks])
+  if (!rows.length) return null
+  const give = (t, id) => {
+    if (!id) return
+    updateTask(t.id, { assigneeId: id })
+    showToast(`Given to ${employees.find((x) => x.id === id)?.name ?? 'them'}`)
+  }
+  return (
+    <div className="card">
+      <div className="card-head"><h2 className="row"><Plane size={16} />Away</h2><span className="muted small">Open work due before they're back</span></div>
+      <div className="away-list">
+        {rows.map(({ e, list }) => (
+          <div key={e.id} className="away-person">
+            <div className="row" style={{ gap: 10 }}>
+              <Avatar id={e.id} size={30} />
+              <div className="grow">
+                <div className="row row-wrap" style={{ gap: 6 }}><b>{e.name}</b>{isAway(e) ? <AwayTag id={e.id} /> : <span className="away-tag is-soon">From {leaveText(e)}</span>}</div>
+                {e.awayNote && <div className="tiny muted">{e.awayNote}</div>}
+              </div>
+              <button className="btn btn-ghost btn-sm" onClick={() => setEditing(e.id)}>Edit</button>
+            </div>
+            {list.length === 0 && <div className="small muted away-none">Nothing due during the leave.</div>}
+            {list.map((t) => (
+              <div key={t.id} className="away-task">
+                <button className="grow away-task-title" onClick={() => openTask(t.id)}>
+                  <span className="strong truncate">{t.title}</span>
+                  <span className="task-meta">{t.clientId ? <ClientTag clientId={t.clientId} /> : 'Internal'}<span className="sep" /><Due date={t.due} /></span>
+                </button>
+                {canEditTask(user, t, employees) && (
+                  <select className="select select-sm" value="" onChange={(ev) => give(t, ev.target.value)} aria-label={`Give "${t.title}" to someone else`}>
+                    <option value="">Give to…</option>
+                    <PeopleOptions employees={employees.filter((x) => x.id !== e.id)} meId={user.id} />
+                  </select>
+                )}
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+      <AwayForm personId={editing} onClose={() => setEditing(null)} />
+    </div>
+  )
+}
 
 const WEEK = 7 * 86400000
 const RANK = { admin: 0, head: 1, member: 2 }
@@ -20,6 +84,7 @@ export default function Team() {
   const [view, setView] = useState('people')
   const [open, setOpen] = useState(null)
   const [dep, setDep] = useState('')
+  const [leaveFor, setLeaveFor] = useState(null)
 
   const people = useMemo(() => {
     const ids = new Set(teamIds(user, employees))
@@ -35,6 +100,7 @@ export default function Team() {
       e, myClients, ups,
       updated: ups.filter((u) => u.clientId && myClients.some((c) => c.id === u.clientId)).length,
       open: openT.length,
+      review: mine.filter((t) => t.status === 'review').length,
       overdueList: mine.filter((t) => t.status !== 'done' && (daysUntil(t.due) ?? 1) < 0),
       waiting: mine.filter((t) => t.status === 'waiting').length,
       done7: mine.filter((t) => t.status === 'done' && (t.completedAt ?? 0) > Date.now() - WEEK).length,
@@ -85,28 +151,31 @@ export default function Team() {
         </select>
       </div>
 
+      <AwaySection people={people} />
+
       {rows.length === 0 && <div className="card"><Empty icon={Users} title="No one in this view" /></div>}
 
       {view === 'people' && rows.length > 0 && (
         <div className="card table-wrap">
           <table className="table">
-            <thead><tr><th>Person</th><th>Update</th><th>To do</th><th>Overdue</th><th>Waiting</th><th>Done (7d)</th><th /></tr></thead>
+            <thead><tr><th>Person</th><th>Update</th><th>To do</th><th>In review</th><th>Overdue</th><th>Waiting</th><th>Done (7d)</th><th /></tr></thead>
             <tbody>
               {rows.map((r) => (
                 <Fragment key={r.e.id}>
                   <tr className="click-row" onClick={() => setOpen(open === r.e.id ? null : r.e.id)}>
-                    <td><div className="row" style={{ gap: 10 }}><Avatar id={r.e.id} size={30} /><div><b>{r.e.name}</b><div className="tiny muted">{r.e.title}</div></div></div></td>
+                    <td><div className="row" style={{ gap: 10 }}><Avatar id={r.e.id} size={30} /><div><div className="row" style={{ gap: 6 }}><b>{r.e.name}</b><AwayTag id={r.e.id} /></div><div className="tiny muted">{r.e.title}</div></div></div></td>
                     <td>{r.ups.length === 0
                       ? <span className="badge tone-red">Not yet</span>
                       : <span className={`badge ${r.updated >= r.myClients.length ? 'tone-green' : 'tone-amber'}`}>{r.myClients.length ? `${r.updated} of ${r.myClients.length} clients` : `${r.ups.length} update${r.ups.length > 1 ? 's' : ''}`}</span>}</td>
                     <td>{r.open}</td>
+                    <td>{r.review}</td>
                     <td>{r.overdueList.length ? <b style={{ color: 'var(--red)' }}>{r.overdueList.length}</b> : 0}</td>
                     <td>{r.waiting}</td>
                     <td>{r.done7}</td>
                     <td style={{ textAlign: 'right' }}><ChevronDown size={16} className={`chev ${open === r.e.id ? 'up' : ''}`} /></td>
                   </tr>
                   {open === r.e.id && (
-                    <tr className="expand-row"><td colSpan={7}>
+                    <tr className="expand-row"><td colSpan={8}>
                       <div className="grid grid-2">
                         <div>
                           <div className="section-title" style={{ marginBottom: 6 }}>Updates · {isToday ? 'today' : formatDate(date)}</div>
@@ -124,6 +193,7 @@ export default function Team() {
                         <div>
                           <div className="section-title row between" style={{ marginBottom: 6 }}>Overdue <Link className="link tiny" to={`/tasks?person=${r.e.id}&show=all`}>All their tasks →</Link></div>
                           {r.overdueList.length === 0 ? <div className="muted small">Nothing overdue.</div> : r.overdueList.map((t) => <TaskRow key={t.id} task={t} />)}
+                          <button className="btn btn-ghost btn-sm mt-8" onClick={() => setLeaveFor(r.e.id)}><Plane />{hasLeave(r.e) && r.e.awayTo >= todayIso() ? `Leave ${leaveText(r.e)} · edit` : 'Mark on leave'}</button>
                         </div>
                       </div>
                     </td></tr>
@@ -157,6 +227,7 @@ export default function Team() {
           )}
         </div>
       )}
+      <AwayForm personId={leaveFor} onClose={() => setLeaveFor(null)} />
     </PageMotion>
   )
 }

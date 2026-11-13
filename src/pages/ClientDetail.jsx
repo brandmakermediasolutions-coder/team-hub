@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { ArrowLeft, Pencil, Plus, ListChecks, PenLine, ChevronLeft, ChevronRight, Info } from 'lucide-react'
+import { ArrowLeft, Pencil, Plus, ListChecks, PenLine, ChevronLeft, ChevronRight, Info, LayoutList } from 'lucide-react'
 import { useStore, useCurrentUser } from '../store/useStore'
 import { canManageClients, canSeePostCalendar } from '../lib/permissions'
 import { dayHeading, monthLabel, shiftMonth, todayIso } from '../lib/date'
-import { Avatar, Empty, PageMotion, TaskRow } from '../components/ui'
+import { Avatar, AwayTag, Empty, PageMotion, TaskRow } from '../components/ui'
 import ClientForm from '../components/ClientForm'
+import TemplatePicker from '../components/TemplatePicker'
 import { PostGrid, Legend } from './PostCalendar'
 import { UpdateBox } from './Home'
 
@@ -18,6 +19,7 @@ export default function ClientDetail() {
   const updates = useStore((s) => s.updates)
   const openNewTask = useStore((s) => s.openNewTask)
   const [editing, setEditing] = useState(false)
+  const [picking, setPicking] = useState(false)
   const [showDone, setShowDone] = useState(false)
   const [month, setMonth] = useState(todayIso().slice(0, 8) + '01')
 
@@ -46,8 +48,9 @@ export default function ClientDetail() {
             <p className="page-sub">{client.services.join(' · ') || 'No services set'}</p>
           </div>
         </div>
-        <div className="row">
+        <div className="row row-wrap">
           {canManageClients(user) && <button className="btn" onClick={() => setEditing(true)}><Pencil />Edit</button>}
+          <button className="btn" onClick={() => setPicking(true)}><LayoutList />Use a template</button>
           <button className="btn btn-primary" onClick={() => openNewTask({ clientId: client.id })}><Plus />New task</button>
         </div>
       </div>
@@ -58,7 +61,7 @@ export default function ClientDetail() {
           {team.map((e) => (
             <div key={e.id} className="row" style={{ gap: 10 }}>
               <Avatar id={e.id} size={28} />
-              <div className="grow"><div className="strong">{e.name}{e.id === client.ownerId && <span className="badge tone-accent" style={{ marginLeft: 8 }}>Account manager</span>}</div><div className="tiny muted">{e.title}</div></div>
+              <div className="grow"><div className="strong row row-wrap" style={{ gap: 6 }}>{e.name}{e.id === client.ownerId && <span className="badge tone-accent">Account manager</span>}<AwayTag id={e.id} /></div><div className="tiny muted">{e.title}</div></div>
               <Link className="btn btn-ghost btn-sm" to={`/tasks?person=${e.id}&client=${client.id}`}>Tasks</Link>
             </div>
           ))}
@@ -123,6 +126,7 @@ export default function ClientDetail() {
       )}
 
       <ClientForm open={editing} client={client} onClose={() => setEditing(false)} />
+      <TemplatePicker open={picking} client={client} onClose={() => setPicking(false)} />
     </PageMotion>
   )
 }

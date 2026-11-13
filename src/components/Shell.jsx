@@ -5,10 +5,12 @@ import { Sun as SunIcon, ListChecks, Building2, CalendarDays, Users, Shield, Log
 import { useStore, useCurrentUser } from '../store/useStore'
 import { ROLE_LABEL, isAdmin, isLead, canSeePostCalendar } from '../lib/permissions'
 import { isCloud } from '../lib/backend'
-import { relTime } from '../lib/date'
+import { relTime, todayIso } from '../lib/date'
+import { awayLabel, isAway } from '../lib/repeat'
 import { Avatar, Empty, StatusBadge, ClientTag } from './ui'
 import TaskDrawer from './TaskDrawer'
 import NewTaskModal from './NewTaskModal'
+import AwayForm from './AwayForm'
 
 function useOutside(ref, onOut) {
   useEffect(() => {
@@ -145,11 +147,25 @@ export default function Shell() {
   const openNewTask = useStore((s) => s.openNewTask)
   const openTask = useStore((s) => s.openTask)
   const tasks = useStore((s) => s.tasks)
+  const rules = useStore((s) => s.rules)
+  const clients = useStore((s) => s.clients)
+  const runRepeats = useStore((s) => s.runRepeats)
   const location = useLocation()
   const [params, setParams] = useSearchParams()
   const contentRef = useRef(null)
+  const [awayOpen, setAwayOpen] = useState(false)
 
   useEffect(() => { contentRef.current?.scrollTo(0, 0) }, [location.pathname])
+
+  // repeating tasks: make what is due now, and again when the date changes while the app is open
+  useEffect(() => { runRepeats() }, [rules, clients, runRepeats])
+  useEffect(() => {
+    let day = todayIso()
+    const check = () => { if (todayIso() !== day) { day = todayIso(); runRepeats() } }
+    const timer = setInterval(check, 60000)
+    document.addEventListener('visibilitychange', check)
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', check) }
+  }, [runRepeats])
 
   // links in emails open the task: /?task=T-123
   useEffect(() => {
@@ -186,13 +202,13 @@ export default function Shell() {
         ))}
         <div className="side-foot">
           {!isCloud && <div className="demo-flag"><FlaskConical size={14} />Demo mode · saved in this browser only</div>}
-          <div className="user-card">
+          <button className="user-card" onClick={() => setAwayOpen(true)} title="Going on leave? Set your dates">
             <Avatar id={user.id} size={36} />
             <div className="grow">
               <div className="name truncate">{user.name}</div>
-              <div className="meta truncate">{user.title || ROLE_LABEL[user.role]}</div>
+              <div className={`meta truncate ${isAway(user) ? 'is-away' : ''}`}>{isAway(user) ? awayLabel(user) : user.title || ROLE_LABEL[user.role]}</div>
             </div>
-          </div>
+          </button>
           <div className="side-actions">
             <button onClick={toggleTheme}>{theme === 'dark' ? <SunIcon /> : <Moon />}{theme === 'dark' ? 'Light' : 'Dark'}</button>
             <button onClick={logout}><LogOut />Log out</button>
@@ -216,6 +232,7 @@ export default function Shell() {
 
       <TaskDrawer />
       <NewTaskModal />
+      <AwayForm personId={awayOpen ? user.id : null} onClose={() => setAwayOpen(false)} />
       <Toast />
     </div>
   )

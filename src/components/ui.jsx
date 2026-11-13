@@ -1,9 +1,10 @@
 import { useEffect } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { X, Calendar, Check, Flame } from 'lucide-react'
+import { X, Calendar, Check, Flame, Repeat, Plane, TriangleAlert } from 'lucide-react'
 import { useStore } from '../store/useStore'
 import { STATUSES } from '../store/seed'
 import { dueInfo } from '../lib/date'
+import { awayDuring, awayLabel, isAway, leaveText } from '../lib/repeat'
 
 /*
   Shared UI building blocks.
@@ -11,16 +12,38 @@ import { dueInfo } from '../lib/date'
     <Due date done />   <ClientTag clientId />   <Modal open onClose title footer>…</Modal>
     <Empty icon title text />  <Field label hint>…</Field>  <PageMotion>…</PageMotion>
     <TaskRow task showAssignee />  (click opens the task drawer; round tick completes it)
+    <AwayTag id />  ("Away till 18 Nov" while someone is on leave)   <RepeatMark />   <LeaveWarning personId due />
 */
 
 const initials = (name = '?') => name.split(' ').map((p) => p[0]).slice(0, 2).join('').toUpperCase()
 
 export function Avatar({ id, size = 32, title }) {
   const e = useStore((s) => s.employees.find((x) => x.id === id))
+  const away = isAway(e)
   return (
-    <span className="avatar" style={{ '--size': `${size}px`, background: e?.color ?? '#9aa0aa' }} title={title ?? e?.name ?? 'Unknown'}>
+    <span className={`avatar ${away ? 'is-away' : ''}`} style={{ '--size': `${size}px`, background: e?.color ?? '#9aa0aa' }}
+      title={title ?? (e ? `${e.name}${away ? ` · ${awayLabel(e)}` : ''}` : 'Unknown')}>
       {initials(e?.name)}
     </span>
+  )
+}
+
+export function AwayTag({ id }) {
+  const e = useStore((s) => s.employees.find((x) => x.id === id))
+  if (!isAway(e)) return null
+  return <span className="away-tag" title={e.awayNote || undefined}><Plane />{awayLabel(e)}</span>
+}
+
+export const RepeatMark = ({ label = true }) => <span className="repeat-mark" title="Repeating task"><Repeat />{label && 'Repeats'}</span>
+
+// "Jesika is away 14 – 18 Nov" when a task for them is due during their leave
+export function LeaveWarning({ personId, due }) {
+  const e = useStore((s) => s.employees.find((x) => x.id === personId))
+  if (!e || !(awayDuring(e, due) || (!due && isAway(e)))) return null
+  return (
+    <div className="note-line is-warn"><TriangleAlert size={14} />
+      <span>{e.name.split(' ')[0]} is on leave {leaveText(e)}{e.awayNote ? ` (${e.awayNote})` : ''}{due ? ', and this is due during it.' : '.'}</span>
+    </div>
   )
 }
 
@@ -34,8 +57,8 @@ export function AvatarStack({ ids = [], max = 4, size = 26 }) {
   )
 }
 
-export const STATUS_TONE = { todo: 'tone-grey', doing: 'tone-blue', waiting: 'tone-amber', done: 'tone-green' }
-export const STATUS_COLOR = { todo: 'var(--grey)', doing: 'var(--blue)', waiting: 'var(--amber)', done: 'var(--green)' }
+export const STATUS_TONE = { todo: 'tone-grey', doing: 'tone-blue', review: 'tone-violet', waiting: 'tone-amber', done: 'tone-green' }
+export const STATUS_COLOR = { todo: 'var(--grey)', doing: 'var(--blue)', review: 'var(--violet)', waiting: 'var(--amber)', done: 'var(--green)' }
 
 export function StatusBadge({ status }) {
   const s = STATUSES.find((x) => x.id === status)
@@ -132,8 +155,9 @@ export function TaskRow({ task, showAssignee = false, showAssigner = true, showC
         <div className="task-meta">
           {[
             showClient && task.clientId && <ClientTag key="c" clientId={task.clientId} />,
-            showAssignee && assignee && <span key="a" className="row" style={{ gap: 5 }}><Avatar id={assignee.id} size={16} />{assignee.name}</span>,
+            showAssignee && assignee && <span key="a" className="row" style={{ gap: 5 }}><Avatar id={assignee.id} size={16} />{assignee.name}<AwayTag id={assignee.id} /></span>,
             showAssigner && assigner && task.assignedById !== task.assigneeId && <span key="f">from {assigner.name.split(' ')[0]}</span>,
+            task.repeatRuleId && <RepeatMark key="r" />,
           ].filter(Boolean).flatMap((el, i) => (i ? [<span key={`s${i}`} className="sep" />, el] : [el]))}
         </div>
       </div>

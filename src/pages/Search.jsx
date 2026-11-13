@@ -2,9 +2,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Search as SearchIcon, Building2, ListChecks, PenLine, MessageSquare, Users, Loader2 } from 'lucide-react'
 import { useStore } from '../store/useStore'
+import { STATUSES } from '../store/seed'
 import { isCloud, searchUpdates } from '../lib/backend'
 import { shortDate } from '../lib/date'
-import { Avatar, ClientTag, Empty, PageMotion, StatusBadge } from '../components/ui'
+import { Avatar, AwayTag, ClientTag, Empty, PageMotion, StatusBadge } from '../components/ui'
 
 function Hi({ text = '', q }) {
   if (!q) return text
@@ -45,7 +46,7 @@ export default function SearchPage() {
     return {
       clients: clients.filter((c) => has(c.name) || has(c.brief) || has(c.deliverables) || has(c.ads)),
       people: employees.filter((e) => has(e.name) || has(e.title) || has(e.department) || has(e.email)),
-      tasks: tasks.filter((x) => has(x.title) || has(x.notes) || x.id.toLowerCase() === t || has(clientName(x.clientId)))
+      tasks: tasks.filter((x) => has(x.title) || has(x.notes) || x.id.toLowerCase() === t || has(clientName(x.clientId)) || STATUSES.find((st) => st.id === x.status)?.label.toLowerCase() === t)
         .sort((a, b) => Number(a.status === 'done') - Number(b.status === 'done') || (b.updatedAt ?? 0) - (a.updatedAt ?? 0)).slice(0, 80),
       updates: updates.filter((u) => has(u.text) || has(clientName(u.clientId))).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 80),
       comments: comments.filter((c) => has(c.text)).sort((a, b) => b.at - a.at).slice(0, 40),
@@ -92,7 +93,7 @@ export default function SearchPage() {
             {r.people.map((e) => (
               <Link key={e.id} to={`/tasks?person=${e.id}`} className="feed-item">
                 <Avatar id={e.id} size={30} />
-                <div className="grow"><div className="strong"><Hi text={e.name} q={q} /></div><div className="tiny muted">{e.title} · {e.department}</div></div>
+                <div className="grow"><div className="strong row" style={{ gap: 6 }}><span><Hi text={e.name} q={q} /></span><AwayTag id={e.id} /></div><div className="tiny muted">{e.title} · {e.department}</div></div>
               </Link>
             ))}
           </Section>

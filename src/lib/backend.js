@@ -13,7 +13,12 @@ const key = import.meta.env.VITE_SUPABASE_ANON_KEY
 export const isCloud = Boolean(url && key)
 export const supabase = isCloud ? createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true } }) : null
 
-export const TABLES = ['employees', 'clients', 'tasks', 'comments', 'updates', 'posts', 'activity']
+export const TABLES = ['employees', 'clients', 'tasks', 'comments', 'updates', 'posts', 'activity', 'repeat_rules', 'task_templates', 'repeat_runs']
+
+// app data key -> database table, where the names differ
+const TABLE_OF = { rules: 'repeat_rules', templates: 'task_templates', repeatRuns: 'repeat_runs' }
+const KEY_OF = Object.fromEntries(Object.entries(TABLE_OF).map(([k, t]) => [t, k]))
+const tableOf = (key) => TABLE_OF[key] ?? key
 
 const snake = (s) => s.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`)
 const camel = (s) => s.replace(/_([a-z])/g, (_, c) => c.toUpperCase())
@@ -43,11 +48,31 @@ export async function loadAll() {
     fetchAll('posts', (q) => q.gte('date', addDays(-150))),
     fetchAll('activity', (q) => q.order('at', { ascending: false }).limit(500)),
   ])
-  return { employees, clients, tasks, comments, updates, posts, activity }
+  // newer tables: if the 2026-11-13 migration has not been run yet, the rest of the app still loads
+  const optional = (p) => p.catch((e) => { console.warn('Team Hub: optional table not ready', e?.message ?? e); return [] })
+  const [rules, templates, repeatRuns] = await Promise.all([
+    optional(fetchAll('repeat_rules')),
+    optional(fetchAll('task_templates')),
+    optional(fetchAll('repeat_runs', (q) => q.gte('at', Date.now() - 45 * 86400000))),
+  ])
+  return { employees, clients, tasks, comments, updates, posts, activity, rules, templates, repeatRuns }
 }
 
 export async function saveRow(table, row) {
-  const { error } = await supabase.from(table).upsert(toDb(row))
+  const { error } = await supabase.from(tableOf(table)).upsert(toDb(row))
+  if (error) throw error
+}
+
+// insert, and quietly skip rows whose id already exists (repeating tasks: safe if two people load at once)
+export async function insertMissing(table, rows) {
+  if (!rows.length) return
+  const { error } = await supabase.from(tableOf(table)).upsert(rows.map(toDb), { onConflict: 'id', ignoreDuplicates: true })
+  if (error) throw error
+}
+
+// away dates: a database function checks it is you, your head, or the admin
+export async function saveAway(id, { awayFrom, awayTo, awayNote }) {
+  const { error } = await supabase.rpc('set_away', { target: id, from_date: awayFrom || null, to_date: awayTo || null, note: awayNote ?? '' })
   if (error) throw error
 }
 
@@ -58,7 +83,7 @@ export async function saveRows(table, rows) {
 }
 
 export async function deleteRow(table, id) {
-  const { error } = await supabase.from(table).delete().eq('id', id)
+  const { error } = await supabase.from(tableOf(table)).delete().eq('id', id)
   if (error) throw error
 }
 
@@ -67,7 +92,7 @@ export function subscribe(onChange) {
   const ch = supabase.channel('team-hub-live')
   TABLES.forEach((table) => {
     ch.on('postgres_changes', { event: '*', schema: 'public', table }, (p) => {
-      onChange(table, p.eventType, p.eventType === 'DELETE' ? fromDb(p.old) : fromDb(p.new))
+      onChange(KEY_OF[table] ?? table, p.eventType, p.eventType === 'DELETE' ? fromDb(p.old) : fromDb(p.new))
     })
   })
   ch.subscribe()

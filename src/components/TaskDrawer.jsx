@@ -1,16 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { X, User, UserCheck, Calendar, Building2, Link2, Send, Plus, Flame, Trash2 } from 'lucide-react'
+import { X, User, UserCheck, Calendar, Building2, Link2, Send, Plus, Flame, Trash2, Eye, Repeat } from 'lucide-react'
 import { useStore, useCurrentUser } from '../store/useStore'
 import { STATUSES } from '../store/seed'
 import { canEditTask, canDeleteTask } from '../lib/permissions'
 import { relTime } from '../lib/date'
-import { Avatar, ClientTag, Due } from './ui'
+import { scheduleText } from '../lib/repeat'
+import { Avatar, AwayTag, ClientTag, Due, LeaveWarning } from './ui'
 import { PeopleOptions } from './NewTaskModal'
+import { ReviewActions, reviewerOf } from './Review'
 
 function Person({ id }) {
   const e = useStore((s) => s.employees.find((x) => x.id === id))
-  return <span className="row"><Avatar id={id} size={24} /><span className="strong">{e?.name ?? 'Unknown'}</span><span className="muted small truncate">{e?.title}</span></span>
+  return <span className="row"><Avatar id={id} size={24} /><span className="strong">{e?.name ?? 'Unknown'}</span><AwayTag id={id} /><span className="muted small truncate">{e?.title}</span></span>
+}
+
+function RuleMark({ ruleId }) {
+  const rule = useStore((s) => s.rules.find((r) => r.id === ruleId))
+  return <span className="badge truncate" title="This task is made automatically (Admin → Repeating)"><Repeat />Repeats{rule ? ` · ${scheduleText(rule).toLowerCase()}` : ''}</span>
 }
 
 function CommentText({ text }) {
@@ -32,6 +39,7 @@ function DrawerBody({ task }) {
   const comments = useMemo(() => allComments.filter((c) => c.taskId === task.id).sort((a, b) => a.at - b.at), [allComments, task.id])
   const history = useMemo(() => allActivity.filter((a) => a.taskId === task.id && a.type !== 'comment').sort((a, b) => b.at - a.at).slice(0, 10), [allActivity, task.id])
   const name = (id) => employees.find((e) => e.id === id)?.name ?? 'Someone'
+  const reviewer = task.status === 'review' ? reviewerOf(task, employees) : null
 
   const [title, setTitle] = useState(task.title)
   const [notes, setNotes] = useState(task.notes ?? '')
@@ -69,15 +77,19 @@ function DrawerBody({ task }) {
                 onClick={() => updateTask(task.id, { status: s.id })}>{s.label}</button>
             ))}
           </div>
+          {task.status === 'review' && reviewer === user.id && (
+            <div className="review-bar"><span className="small soft">{task.assigneeId === user.id ? 'Waiting for your review.' : `${name(task.assigneeId).split(' ')[0]} sent this for your review.`}</span><ReviewActions task={task} /></div>
+          )}
         </div>
 
         <dl className="props">
           <dt><UserCheck />Who does it</dt>
           <dd>{editable
-            ? <select className="select select-sm" value={task.assigneeId} onChange={(e) => reassign(e.target.value)}><PeopleOptions employees={employees} meId={user.id} /></select>
+            ? <span className="row row-wrap"><select className="select select-sm" value={task.assigneeId} onChange={(e) => reassign(e.target.value)}><PeopleOptions employees={employees} meId={user.id} /></select><AwayTag id={task.assigneeId} /></span>
             : <Person id={task.assigneeId} />}</dd>
           <dt><User />Given by</dt>
           <dd><Person id={task.assignedById} /></dd>
+          {task.status === 'review' && reviewer && <><dt><Eye />Reviewer</dt><dd><Person id={reviewer} /></dd></>}
           <dt><Building2 />Client</dt>
           <dd>{editable
             ? <select className="select select-sm" value={task.clientId ?? ''} onChange={(e) => updateTask(task.id, { clientId: e.target.value || null })}>
@@ -90,6 +102,7 @@ function DrawerBody({ task }) {
           <dt><Flame />Urgent</dt>
           <dd><label className={`check ${task.urgent ? 'on urgent' : ''}`}><input type="checkbox" disabled={!editable} checked={!!task.urgent} onChange={(e) => updateTask(task.id, { urgent: e.target.checked })} />{task.urgent ? 'Yes' : 'No'}</label></dd>
         </dl>
+        {task.status !== 'done' && <LeaveWarning personId={task.assigneeId} due={task.due} />}
 
         <div className="stack" style={{ gap: 8 }}>
           <div className="section-title">Notes</div>
@@ -178,7 +191,7 @@ export default function TaskDrawer() {
           <motion.aside className="drawer" role="dialog" aria-modal="true" aria-label="Task details"
             initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} transition={{ type: 'spring', stiffness: 380, damping: 38 }}>
             <div className="drawer-head">
-              <span className="badge mono">{task.id}</span>
+              {task.repeatRuleId ? <RuleMark ruleId={task.repeatRuleId} /> : <span className="badge mono">{task.id}</span>}
               <span className="muted small grow">Created {relTime(task.createdAt)}</span>
               <button className="icon-btn" onClick={close} aria-label="Close"><X /></button>
             </div>

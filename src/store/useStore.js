@@ -1,12 +1,14 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { buildSeed, STATUSES } from './seed'
-import { isCloud, supabase, loadAll, saveRow, deleteRow, subscribe } from '../lib/backend'
-import { todayIso } from '../lib/date'
+import { isCloud, supabase, loadAll, saveRow, deleteRow, subscribe, insertMissing, saveAway } from '../lib/backend'
+import { shortDate, todayIso } from '../lib/date'
+import { dueRepeats, reviewerFor } from '../lib/repeat'
 
 /*
   One app store.
-  DATA     employees, clients, tasks, comments, updates (daily updates), posts (post calendar), activity
+  DATA     employees, clients, tasks, comments, updates (daily updates), posts (post calendar), activity,
+           rules (repeating tasks), templates (task templates), repeatRuns (repeating tasks already made)
   SESSION  phase: 'loading' | 'login' | 'recovery' | 'not-on-team' | 'error' | 'ready'
            currentUserId, theme, lastSeen{userId: ts}
   UI       openTaskId (task drawer), newTask (null | defaults for the New task window), toast
@@ -15,7 +17,7 @@ import { todayIso } from '../lib/date'
   In demo mode everything is kept in this browser's storage.
 */
 
-const DATA_KEYS = ['employees', 'clients', 'tasks', 'comments', 'updates', 'posts', 'activity']
+const DATA_KEYS = ['employees', 'clients', 'tasks', 'comments', 'updates', 'posts', 'activity', 'rules', 'templates', 'repeatRuns']
 const empty = Object.fromEntries(DATA_KEYS.map((k) => [k, []]))
 const uid = (prefix) => `${prefix}-${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).slice(2, 5).toUpperCase()}`
 const nextId = (list, prefix, pad) => {
@@ -163,11 +165,18 @@ export const useStore = create(
           const next = { ...old, ...patch, updatedAt: Date.now() }
           const base = { taskId: id, clientId: next.clientId }
           const notify = s.currentUserId === next.assigneeId ? next.assignedById : next.assigneeId
-          if (patch.status && patch.status !== old.status) {
+          const moved = patch.status && patch.status !== old.status
+          if (moved) {
             next.completedAt = patch.status === 'done' ? Date.now() : null
+            // review step: pick who checks it (giver if a head/admin, else the doer's head)
+            if (patch.status === 'review') next.reviewerId = reviewerFor(next, s.employees)
           }
           put('tasks', next)
-          if (patch.status && patch.status !== old.status) {
+          if (moved && patch.status === 'review') {
+            log({ ...base, type: 'review', targetId: next.reviewerId, text: `sent "${next.title}" for review` })
+          } else if (moved && old.status === 'review' && patch.status === 'done' && s.currentUserId !== next.assigneeId) {
+            log({ ...base, type: 'status', targetId: next.assigneeId, text: `approved "${next.title}"` })
+          } else if (moved) {
             log({ ...base, type: 'status', targetId: notify,
               text: patch.status === 'done' ? `completed "${next.title}"` : `moved "${next.title}" to ${statusLabel(patch.status)}` })
           }
@@ -176,6 +185,52 @@ export const useStore = create(
               text: `gave "${next.title}" to ${firstName(emp(patch.assigneeId))} (was ${firstName(emp(old.assigneeId))})` })
           }
           if ('due' in patch && patch.due !== old.due) log({ ...base, type: 'edit', targetId: notify, text: `changed the due date of "${next.title}"` })
+        },
+
+        // review step: back to Doing, with an optional one-line note saved as a comment
+        sendBack: (id, note = '') => {
+          const s = get()
+          const old = s.tasks.find((t) => t.id === id)
+          if (!old) return
+          put('tasks', { ...old, status: 'doing', completedAt: null, updatedAt: Date.now() })
+          const body = note.trim()
+          if (body) put('comments', { id: uid('CM'), taskId: id, authorId: s.currentUserId, text: body, at: Date.now() })
+          log({ type: 'status', taskId: id, clientId: old.clientId, targetId: old.assigneeId,
+            text: `sent "${old.title}" back${body ? `: ${body}` : ''}` })
+        },
+
+        // ---------- repeating tasks ----------
+        // Makes any repeating task that is due to exist and doesn't yet. Safe to call often.
+        runRepeats: () => {
+          const s = get()
+          if (s.phase !== 'ready' || !s.currentUserId || !s.rules?.length) return
+          const made = new Set([...s.tasks.map((t) => t.id), ...s.repeatRuns.map((r) => r.id)])
+          const fresh = dueRepeats(s.rules, s.clients, s.employees, todayIso()).filter((t) => !made.has(t.id))
+          if (!fresh.length) return
+          const runs = fresh.map((t) => ({ id: t.id, ruleId: t.repeatRuleId, at: Date.now() }))
+          set((x) => ({ tasks: [...fresh, ...x.tasks], repeatRuns: [...runs, ...x.repeatRuns] }))
+          if (isCloud) insertMissing('tasks', fresh).then(() => insertMissing('repeatRuns', runs)).catch((e) => console.error('Repeating tasks not saved', e))
+        },
+        saveRule: (rule) => put('rules', { id: rule.id ?? uid('R'), createdAt: Date.now(), active: true, ...rule }),
+        deleteRule: (id) => del('rules', id),
+
+        // ---------- templates ----------
+        saveTemplate: (tpl) => put('templates', { id: tpl.id ?? uid('TPL'), createdAt: Date.now(), ...tpl }),
+        deleteTemplate: (id) => del('templates', id),
+
+        // ---------- on leave ----------
+        setAway: (id, { awayFrom, awayTo, awayNote = '' }) => {
+          const s = get()
+          const e = s.employees.find((x) => x.id === id)
+          if (!e) return
+          const clear = !awayFrom || !awayTo
+          const patch = clear ? { awayFrom: null, awayTo: null, awayNote: '' }
+            : { awayFrom: awayFrom <= awayTo ? awayFrom : awayTo, awayTo: awayFrom <= awayTo ? awayTo : awayFrom, awayNote: awayNote.trim() }
+          upsertLocal('employees', { ...e, ...patch })
+          if (isCloud) saveAway(id, patch).catch(failed)
+          if (id !== s.currentUserId) {
+            log({ type: 'people', targetId: id, text: clear ? `cleared your leave dates` : `marked you away ${shortDate(patch.awayFrom)} – ${shortDate(patch.awayTo)}` })
+          }
         },
 
         deleteTask: (id) => {
@@ -257,7 +312,7 @@ export const useStore = create(
           }
         },
 
-        resetDemo: () => set({ ...buildSeed(), lastSeen: {}, openTaskId: null, newTask: null }),
+        resetDemo: () => { set({ ...buildSeed(), lastSeen: {}, openTaskId: null, newTask: null }); get().runRepeats() },
       }
     },
     {

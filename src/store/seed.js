@@ -7,6 +7,7 @@ export const SERVICES = ['Social Media', 'Performance Marketing', 'SEO', 'Creati
 export const STATUSES = [
   { id: 'todo', label: 'To do' },
   { id: 'doing', label: 'Doing' },
+  { id: 'review', label: 'In review' },
   { id: 'waiting', label: 'Waiting on client' },
   { id: 'done', label: 'Done' },
 ]
@@ -21,6 +22,57 @@ export const POST_STATUSES = [
   { id: 'scheduled', label: 'Scheduled' },
   { id: 'posted', label: 'Posted' },
 ]
+
+// short names for services: in lists ("PPC") and inside task titles ("Monthly social media report")
+export const SERVICE_SHORT = { 'Social Media': 'Social Media', 'Performance Marketing': 'PPC', SEO: 'SEO', Creative: 'Creative', Website: 'Website' }
+export const SERVICE_IN_TITLE = { 'Social Media': 'social media', 'Performance Marketing': 'PPC', SEO: 'SEO', Creative: 'creative', Website: 'website' }
+export const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+
+// Repeating rules that ship with Team Hub (also inserted by supabase/migrations/2026-11-13-batch1.sql)
+export function defaultRules() {
+  const created = at('2026-11-13', 9)
+  return [
+    { id: 'R-1', title: 'Monthly {service} report — {client}', scope: 'service', services: ['Social Media', 'Performance Marketing', 'SEO'], clientId: null,
+      assign: 'service', personId: null, freq: 'monthly', day: 1, dueDay: 5, active: true, createdAt: created },
+    { id: 'R-2', title: 'Weekly PPC report — {client}', scope: 'service', services: ['Performance Marketing'], clientId: null,
+      assign: 'service', personId: null, freq: 'weekly', day: 1, dueDay: 1, active: true, createdAt: created },
+  ]
+}
+
+// Starter task templates. who: 'owner' (account manager) | 'service' (that service's person) | 'person'
+export function defaultTemplates() {
+  const created = at('2026-11-13', 9)
+  const i = (title, days, assign = 'service', service = null) => ({ title, assign, service, personId: null, days })
+  const SM = 'Social Media', PM = 'Performance Marketing', SEO = 'SEO'
+  return [
+    { id: 'TPL-1', name: 'New social media client', createdAt: created, items: [
+      i('Kick-off call and brand questionnaire', 1, 'owner'),
+      i('Collect page logins, brand kit and assets', 2, 'owner'),
+      i('Competitor and audience research', 4, 'service', SM),
+      i('Content pillars and tone of voice', 5, 'service', SM),
+      i('Profile, cover and highlight refresh', 6, 'service', 'Creative'),
+      i('First month content calendar', 7, 'service', SM),
+      i('Send content calendar for client approval', 8, 'owner'),
+    ] },
+    { id: 'TPL-2', name: 'New PPC client', createdAt: created, items: [
+      i('Get ad account and Business Manager access', 1, 'service', PM),
+      i('Set up pixel and conversion tracking', 3, 'service', PM),
+      i('Keyword and audience research', 4, 'service', PM),
+      i('Campaign structure and budget plan', 5, 'service', PM),
+      i('Ad copy and creative brief', 6, 'service', PM),
+      i('Ad creatives', 8, 'service', 'Creative'),
+      i('Launch campaigns and check tracking', 10, 'service', PM),
+    ] },
+    { id: 'TPL-3', name: 'New SEO client', createdAt: created, items: [
+      i('Get Search Console, Analytics and website access', 1, 'service', SEO),
+      i('Technical site audit', 4, 'service', SEO),
+      i('Keyword research and target pages', 6, 'service', SEO),
+      i('Competitor backlink check', 7, 'service', SEO),
+      i('On-page fixes list for the website', 9, 'service', SEO),
+      i('Share the 3-month SEO plan with the client', 10, 'owner'),
+    ] },
+  ]
+}
 
 const at = (iso, hour = 11) => new Date(`${iso}T${String(hour).padStart(2, '0')}:00:00+05:30`).getTime()
 
@@ -180,5 +232,5 @@ export function buildSeed() {
     { id: 'A-4', at: at('2026-11-12', 11), actorId: 'BM-002', type: 'assigned', text: 'assigned "Black Friday sale static posts" to Jesika', taskId: 'T-101', clientId: C['The Indian Mudra'], targetId: 'BM-003' },
   ]
 
-  return { employees, clients, tasks, comments, updates, posts, activity }
+  return { employees, clients, tasks, comments, updates, posts, activity, rules: defaultRules(), templates: defaultTemplates(), repeatRuns: [] }
 }
