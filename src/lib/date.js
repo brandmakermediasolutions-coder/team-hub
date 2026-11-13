@@ -81,6 +81,34 @@ export const shiftMonth = (isoDate, delta) => {
   return iso(new Date(y, m - 1 + delta, 1))
 }
 
+// Monday of the week that contains the given ISO date
+export const weekStart = (isoDate) => {
+  const [y, m, d] = isoDate.split('-').map(Number)
+  const dt = new Date(y, m - 1, d)
+  dt.setDate(d - ((dt.getDay() + 6) % 7))
+  return iso(dt)
+}
+
+// the 7 ISO dates (Mon–Sun) starting at the given Monday
+export const weekDays = (isoStart) => {
+  const [y, m, d] = isoStart.split('-').map(Number)
+  return Array.from({ length: 7 }, (_, i) => iso(new Date(y, m - 1, d + i)))
+}
+
+export const shiftWeek = (isoStart, delta) => {
+  const [y, m, d] = isoStart.split('-').map(Number)
+  return iso(new Date(y, m - 1, d + delta * 7))
+}
+
+// '10 – 16 Nov 2026' / '27 Oct – 2 Nov 2026'
+export const weekLabel = (isoStart) => {
+  const da = new Date(`${isoStart}T12:00:00`)
+  const db = new Date(`${weekDays(isoStart)[6]}T12:00:00`)
+  const same = da.getMonth() === db.getMonth()
+  const left = da.toLocaleDateString('en-IN', same ? { day: 'numeric' } : { day: 'numeric', month: 'short' })
+  return `${left} – ${db.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`
+}
+
 export const monthLabel = (isoDate) => {
   const [y, m] = isoDate.split('-').map(Number)
   return new Date(y, m - 1, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })

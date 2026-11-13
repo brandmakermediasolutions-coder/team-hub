@@ -27,3 +27,8 @@ export function canEditTask(user, task, employees) {
 
 export const canDeleteTask = (user, task) => isAdmin(user) || task?.assignedById === user?.id
 export const canManageClients = isLead
+
+// The post calendar belongs to the Social Media team. Admin sees it too; nobody else does.
+// (The database enforces the same rule on the posts table, see supabase/schema.sql.)
+export const POST_CALENDAR_DEPARTMENT = 'Social Media'
+export const canSeePostCalendar = (u) => Boolean(u && u.active !== false && (isAdmin(u) || u.department === POST_CALENDAR_DEPARTMENT))

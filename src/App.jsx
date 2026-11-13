@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useStore, useCurrentUser } from './store/useStore'
-import { isAdmin, isLead } from './lib/permissions'
+import { isAdmin, isLead, canSeePostCalendar } from './lib/permissions'
 import Shell from './components/Shell'
 import Login, { Splash } from './pages/Login'
 import Home from './pages/Home'
@@ -35,7 +35,7 @@ export default function App() {
             <Route path="tasks" element={<Tasks />} />
             <Route path="clients" element={<Clients />} />
             <Route path="clients/:id" element={<ClientDetail />} />
-            <Route path="calendar" element={<PostCalendar />} />
+            <Route path="calendar" element={canSeePostCalendar(user) ? <PostCalendar /> : <Navigate to="/" replace />} />
             <Route path="search" element={<SearchPage />} />
             <Route path="team" element={isLead(user) ? <Team /> : <Navigate to="/" replace />} />
             <Route path="admin" element={isAdmin(user) ? <Admin /> : <Navigate to="/" replace />} />

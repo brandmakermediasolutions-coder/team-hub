@@ -131,6 +131,12 @@ language sql stable security definer set search_path = public as $$
   select exists (select 1 from chain where head_id = me_id())
 $$;
 
+-- true if the signed-in person may use the post calendar: the admin or the Social Media team
+create or replace function can_see_posts() returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from employees where id = me_id() and (role = 'admin' or department = 'Social Media'))
+$$;
+
 -- ---------------------------------------------------------------------
 -- Only people on the team list can create an account
 -- ---------------------------------------------------------------------
@@ -200,11 +206,15 @@ create policy "own updates insert"  on updates for insert with check (employee_i
 create policy "own updates update"  on updates for update using (employee_id = me_id() or is_admin()) with check (employee_id = me_id() or is_admin());
 create policy "own updates delete"  on updates for delete using (employee_id = me_id() or is_admin());
 
--- post calendar: anyone on the team can plan and update posts
-create policy "team reads posts"   on posts for select using (is_member());
-create policy "team adds posts"    on posts for insert with check (is_member());
-create policy "team edits posts"   on posts for update using (is_member()) with check (is_member());
-create policy "team removes posts" on posts for delete using (is_member());
+-- post calendar: only the Social Media team and the admin can see, plan and update posts
+drop policy if exists "social reads posts"   on posts;
+drop policy if exists "social adds posts"    on posts;
+drop policy if exists "social edits posts"   on posts;
+drop policy if exists "social removes posts" on posts;
+create policy "social reads posts"   on posts for select using (can_see_posts());
+create policy "social adds posts"    on posts for insert with check (can_see_posts());
+create policy "social edits posts"   on posts for update using (can_see_posts()) with check (can_see_posts());
+create policy "social removes posts" on posts for delete using (can_see_posts());
 
 -- activity feed
 create policy "team reads activity" on activity for select using (is_member());

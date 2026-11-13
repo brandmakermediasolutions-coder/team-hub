@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { ArrowLeft, Pencil, Plus, ListChecks, PenLine, ChevronLeft, ChevronRight, Info } from 'lucide-react'
 import { useStore, useCurrentUser } from '../store/useStore'
-import { canManageClients } from '../lib/permissions'
+import { canManageClients, canSeePostCalendar } from '../lib/permissions'
 import { dayHeading, monthLabel, shiftMonth, todayIso } from '../lib/date'
 import { Avatar, Empty, PageMotion, TaskRow } from '../components/ui'
 import ClientForm from '../components/ClientForm'
@@ -107,7 +107,7 @@ export default function ClientDetail() {
         </div>
       </div>
 
-      {client.services.includes('Social Media') && (
+      {client.services.includes('Social Media') && canSeePostCalendar(user) && (
         <div className="card" style={{ overflow: 'hidden' }}>
           <div className="card-head" style={{ paddingBottom: 12 }}>
             <h2>Post calendar</h2>
